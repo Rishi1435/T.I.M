@@ -1,0 +1,94 @@
+# ============================================================
+# T.I.M. (This Is Me) — Flutter Desktop (Windows) manifest
+# ============================================================
+# After extracting the workspace, run:
+#   flutter create . --platforms=windows
+#   flutter pub get
+#   flutter run -d windows \
+#     --dart-define=SUPABASE_URL=... \
+#     --dart-define=SUPABASE_ANON_KEY=... \
+#     --dart-define=WS_URL=ws://127.0.0.1:8765
+# ============================================================
+
+name: tim_companion
+description: T.I.M. — This Is Me. A 100% offline, privacy-first, E2EE AI mentor.
+publish_to: 'none'
+version: 0.2.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: '>=3.13.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+
+  # ---- State management ----
+  flutter_riverpod: ^2.4.9
+  riverpod_annotation: ^2.3.3
+
+  # ---- Supabase (auth + encrypted blob sync only — NO pgvector) ----
+  supabase_flutter: ^2.0.2
+
+  # ---- WebSocket client for the local Python audio / vision / scraper worker ----
+  web_socket_channel: ^2.4.0
+
+  # ---- Local AI inference (C++ via Dart FFI) ----
+  llama_cpp_dart: ^0.2.2      # GGUF inference in-process
+
+  # ---- Local vault: SQLite + sqlite-vec ----
+  sqlite3: ^2.4.0
+  sqlite3_flutter_libs: ^0.5.20
+  path_provider: ^2.1.1
+  path: ^1.9.0
+
+  # ---- Cryptography (E2EE: AES-256-GCM + PBKDF2) ----
+  cryptography: ^2.7.0
+  pinenacl: ^0.6.0            # Argon2 / secretbox fallback
+
+  # ---- File parsing / multimodal ----
+  syncfusion_flutter_pdf: ^24.1.41   # local PDF text extraction
+  cross_file: ^0.3.4+1
+
+  # ---- UI / UX ----
+  google_fonts: ^6.1.0
+  uuid: ^4.2.1
+  intl: ^0.18.1
+  shared_preferences: ^2.2.2
+  flutter_dotenv: ^5.1.0
+  collection: ^1.18.0
+  desktop_drop: ^0.4.4        # drag-and-drop file zone
+  animated_size_and_fade: ^4.0.0
+  glass_kit: ^3.0.0           # Live Call View glassmorphism
+
+  # ---- Audio capture / playback ----
+  record: ^5.2.1
+  audioplayers: ^5.2.0
+
+  # ---- Networking for the .gguf auto-downloader + SearXNG scraper ----
+  dio: ^5.4.0
+  http: ^1.1.2
+
+  # ---- Misc ----
+  crypto: ^3.0.3
+  archive: ^4.0.9             # .tim backup packaging
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  build_runner: ^2.4.7
+  riverpod_generator: ^2.3.9
+  msix: ^3.16.6               # Windows .msix installer
+
+dependency_overrides:
+  record_linux: ^1.3.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/icons/
+    - assets/sounds/
+    - .env

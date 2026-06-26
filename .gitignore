@@ -1,0 +1,39 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+**/generated_plugin_registrant.*
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.android/
+
+# Secrets
+.env
+*.env.local
+
+# Native build artifacts
+windows/runner/Debug/
+windows/runner/Release/
+*.user
+*.msix
+
+# Python worker
+__pycache__/
+*.pyc
+backend/.venv/
+backend/models/
+backend/enrollments/
+backend/ffprobe.exe
+backend/ffmpeg.exe
+
+# Local vault (NEVER commit)
+vault/
+*.tim
+*.tim.bak
