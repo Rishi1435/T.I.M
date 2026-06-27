@@ -36,7 +36,7 @@ Future<void> main() async {
   // ---- Supabase init ------------------------------------------------
   await Supabase.initialize(
     url: AppConfig.supabaseUrl,
-    anonKey: AppConfig.supabaseAnonKey,
+    publishableKey: AppConfig.supabaseAnonKey,
     debug: AppConfig.debug,
   );
   log.info('Supabase initialised: ${AppConfig.supabaseUrl}');
