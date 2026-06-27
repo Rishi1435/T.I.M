@@ -106,3 +106,15 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# ---- llama.cpp prebuilt DLLs ----
+# llama_cpp_dart on Windows requires llama.dll (and its dependency DLLs)
+# to be present beside the executable. The DLLs are stored in windows/llama_dlls/
+# and copied into the build output on every build.
+set(LLAMA_DLLS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/llama_dlls")
+if(EXISTS "${LLAMA_DLLS_DIR}")
+  file(GLOB LLAMA_DLL_FILES "${LLAMA_DLLS_DIR}/*.dll")
+  install(FILES ${LLAMA_DLL_FILES}
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+endif()

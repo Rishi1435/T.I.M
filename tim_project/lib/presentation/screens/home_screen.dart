@@ -190,10 +190,25 @@ class _ModelBadge extends ConsumerWidget {
       );
     }
     if (state.phase == ModelPhase.downloading) {
-      return Chip(
+      return ActionChip(
+        avatar: const Icon(Icons.pause, size: 16),
         label: Text(
-          'Downloading ${(state.downloadProgress * 100).toStringAsFixed(0)}%',
+          'Downloading ${(state.downloadProgress * 100).toStringAsFixed(0)}% (Pause)',
         ),
+        onPressed: () {
+          ref.read(modelProvider.notifier).pauseDownload();
+        },
+      );
+    }
+    if (state.phase == ModelPhase.paused) {
+      return ActionChip(
+        avatar: const Icon(Icons.play_arrow, size: 16),
+        label: Text(
+          'Paused ${(state.downloadProgress * 100).toStringAsFixed(0)}% (Resume)',
+        ),
+        onPressed: () {
+          ref.read(modelProvider.notifier).downloadAndLoad();
+        },
       );
     }
     if (state.phase == ModelPhase.loading) {

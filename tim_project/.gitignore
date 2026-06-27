@@ -47,3 +47,6 @@ app.*.map.json
 # Local Environment Variables
 .env
 
+
+# Prebuilt llama.cpp DLLs (large binaries, download via build.dart)
+windows/llama_dlls/

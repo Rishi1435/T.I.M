@@ -49,8 +49,14 @@ class LlmEngine {
     try {
       _log.info('Loading model: $ggufPath '
                 '(ctx=$contextTokens, gpu_layers=$gpuLayers)');
-      // llama_cpp_dart exposes a sync constructor; wrap in a future so
-      // the UI thread isn't blocked during the disk read.
+      // llama_cpp_dart on Windows uses DynamicLibrary.process() by default,
+      // which requires llama symbols to be linked into the exe — they aren't.
+      // Instead, tell it to use DynamicLibrary.open('llama.dll') so it loads
+      // from the DLL placed beside the exe by the build hook.
+      if (Platform.isWindows) {
+        Llama.libraryPath = 'llama.dll';
+      }
+      // Wrap in Future to avoid blocking the UI thread during disk I/O.
       _model = await Future(() {
         final modelParams = ModelParams()..nGpuLayers = gpuLayers;
         final contextParams = ContextParams()

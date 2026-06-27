@@ -13,7 +13,7 @@ import '../../data/services/model_downloader.dart';
 import '../../platform/channels/hardware_scanner.dart';
 import 'hardware_provider.dart';
 
-enum ModelPhase { idle, recommending, downloading, loading, ready, error }
+enum ModelPhase { idle, recommending, downloading, paused, loading, ready, error }
 
 @immutable
 class ModelState {
@@ -22,6 +22,11 @@ class ModelState {
     this.recommended,
     this.selected,
     this.downloadProgress = 0.0,
+    this.downloadSpeedBps = 0.0,
+    this.downloadEtaSeconds = -1,
+    this.downloadBytesReceived = 0,
+    this.downloadTotalBytes = 0,
+    this.isOnDisk = false,
     this.error,
   });
 
@@ -29,6 +34,12 @@ class ModelState {
   final GgufModel? recommended;
   final GgufModel? selected;
   final double downloadProgress;
+  final double downloadSpeedBps;
+  final int downloadEtaSeconds;
+  final int downloadBytesReceived;
+  final int downloadTotalBytes;
+  /// True if the selected model's .gguf already exists on disk.
+  final bool isOnDisk;
   final String? error;
 
   ModelState copyWith({
@@ -36,6 +47,11 @@ class ModelState {
     GgufModel? recommended,
     GgufModel? selected,
     double? downloadProgress,
+    double? downloadSpeedBps,
+    int? downloadEtaSeconds,
+    int? downloadBytesReceived,
+    int? downloadTotalBytes,
+    bool? isOnDisk,
     String? error,
   }) =>
       ModelState(
@@ -43,6 +59,12 @@ class ModelState {
         recommended: recommended ?? this.recommended,
         selected: selected ?? this.selected,
         downloadProgress: downloadProgress ?? this.downloadProgress,
+        downloadSpeedBps: downloadSpeedBps ?? this.downloadSpeedBps,
+        downloadEtaSeconds: downloadEtaSeconds ?? this.downloadEtaSeconds,
+        downloadBytesReceived:
+            downloadBytesReceived ?? this.downloadBytesReceived,
+        downloadTotalBytes: downloadTotalBytes ?? this.downloadTotalBytes,
+        isOnDisk: isOnDisk ?? this.isOnDisk,
         error: error ?? this.error,
       );
 }
@@ -64,6 +86,20 @@ class ModelController extends StateNotifier<ModelState> {
       recommended: rec,
       selected: rec,
     );
+    // After picking, check if it's already on disk.
+    _checkDisk(rec);
+  }
+
+  /// Called once on creation — picks best model, checks disk.
+  Future<void> initCheck() async {
+    recommend();
+  }
+
+  Future<void> _checkDisk(GgufModel model) async {
+    final onDisk = await _downloader.isDownloaded(model.id);
+    if (mounted) {
+      state = state.copyWith(isOnDisk: onDisk);
+    }
   }
 
   GgufModel _pick() {
@@ -112,11 +148,24 @@ class ModelController extends StateNotifier<ModelState> {
     try {
       // Skip download if already on disk.
       if (!await _downloader.isDownloaded(m.id)) {
-        state = state.copyWith(phase: ModelPhase.downloading);
-        await for (final p in _downloader.download(m)) {
-          state = state.copyWith(downloadProgress: p);
+        state = state.copyWith(
+          phase: ModelPhase.downloading,
+          downloadProgress: state.phase == ModelPhase.paused ? state.downloadProgress : 0.0,
+          downloadSpeedBps: 0,
+          downloadEtaSeconds: -1,
+        );
+        await for (final prog in _downloader.download(m)) {
+          if (!mounted) return;
+          state = state.copyWith(
+            downloadProgress: prog.fraction,
+            downloadSpeedBps: prog.speedBytesPerSec,
+            downloadEtaSeconds: prog.etaSeconds,
+            downloadBytesReceived: prog.bytesReceived,
+            downloadTotalBytes: prog.totalBytes,
+          );
         }
       }
+      if (!mounted) return;
       state = state.copyWith(
         phase: ModelPhase.loading,
         downloadProgress: 1.0,
@@ -125,9 +174,24 @@ class ModelController extends StateNotifier<ModelState> {
       // GPU layers: full offload if VRAM >= minVram, else 0.
       final gpuLayers = (_hw.dedicatedVramGb >= m.minVramGb) ? 99 : 0;
       await _engine.loadModel(path, contextTokens: 4096, gpuLayers: gpuLayers);
+      if (!mounted) return;
       state = state.copyWith(phase: ModelPhase.ready);
+    } on DownloadPausedException {
+      if (mounted) {
+        state = state.copyWith(
+          phase: ModelPhase.paused,
+          downloadSpeedBps: 0,
+          downloadEtaSeconds: -1,
+        );
+      }
     } catch (e) {
-      state = state.copyWith(phase: ModelPhase.error, error: '$e');
+      if (mounted) state = state.copyWith(phase: ModelPhase.error, error: '$e');
+    }
+  }
+
+  void pauseDownload() {
+    if (state.phase == ModelPhase.downloading) {
+      _downloader.cancelAll();
     }
   }
 }
@@ -138,7 +202,10 @@ final llmEngineProvider = Provider<LlmEngine>((ref) => LlmEngine());
 
 final modelProvider = StateNotifierProvider<ModelController, ModelState>(
   (ref) {
-    final hwAsync = ref.watch(hardwareProvider);
+    // Use .read (not .watch) so the controller is NEVER disposed and recreated
+    // when hardware data updates. A mid-session teardown causes the
+    // "Tried to use ModelController after dispose" crash.
+    final hwAsync = ref.read(hardwareProvider);
     final hw = hwAsync.maybeWhen(
       data: (p) => p,
       orElse: () => const HardwareProfile(
@@ -150,10 +217,13 @@ final modelProvider = StateNotifierProvider<ModelController, ModelState>(
         gpuName: 'fallback',
       ),
     );
-    return ModelController(
+    final ctrl = ModelController(
       hw,
       ref.read(modelDownloaderProvider),
       ref.read(llmEngineProvider),
     );
+    // Auto-pick best model and check disk on startup.
+    ctrl.initCheck();
+    return ctrl;
   },
 );
