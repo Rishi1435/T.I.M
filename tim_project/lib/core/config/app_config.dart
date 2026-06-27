@@ -14,15 +14,36 @@ class AppConfig {
       const bool.fromEnvironment('DEBUG', defaultValue: false) ||
       (dotenv.isInitialized && dotenv.env['DEBUG']?.toLowerCase() == 'true');
 
-  static String get supabaseUrl =>
-      const String.fromEnvironment('SUPABASE_URL').isNotEmpty
-          ? const String.fromEnvironment('SUPABASE_URL')
-          : (dotenv.isInitialized ? dotenv.env['SUPABASE_URL'] : null) ?? '';
+  // ----------------------------------------------------------------
+  // Supabase project credentials.
+  // Priority: --dart-define > .env file > hardcoded fallback.
+  // The anon key is a public client credential protected by Supabase
+  // Row Level Security — it is safe to include in source code.
+  // ----------------------------------------------------------------
+  static const _kSupabaseUrl =
+      'https://ktsoacrewzqqsgjvcyyg.supabase.co';
+  static const _kSupabaseAnonKey =
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt0c29hY3Jld3pxcXNnanZjeXlnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI0ODA0MjQsImV4cCI6MjA5ODA1NjQyNH0.APot9ZLbDqZi1N2Ao8R4VOWhnQ0o7uMybSDrN7rfMBI';
 
-  static String get supabaseAnonKey =>
-      const String.fromEnvironment('SUPABASE_ANON_KEY').isNotEmpty
-          ? const String.fromEnvironment('SUPABASE_ANON_KEY')
-          : (dotenv.isInitialized ? dotenv.env['SUPABASE_ANON_KEY'] : null) ?? '';
+  static String get supabaseUrl {
+    const dartDefine = String.fromEnvironment('SUPABASE_URL');
+    if (dartDefine.isNotEmpty) return dartDefine;
+    if (dotenv.isInitialized) {
+      final v = dotenv.env['SUPABASE_URL'];
+      if (v != null && v.isNotEmpty) return v;
+    }
+    return _kSupabaseUrl;
+  }
+
+  static String get supabaseAnonKey {
+    const dartDefine = String.fromEnvironment('SUPABASE_ANON_KEY');
+    if (dartDefine.isNotEmpty) return dartDefine;
+    if (dotenv.isInitialized) {
+      final v = dotenv.env['SUPABASE_ANON_KEY'];
+      if (v != null && v.isNotEmpty) return v;
+    }
+    return _kSupabaseAnonKey;
+  }
 
   /// WebSocket URL of the local Python audio / vision / scraper worker.
   static String get wsUrl =>
