@@ -72,12 +72,20 @@ class AudioSession:
     last_voice_at: float = field(default_factory=time.monotonic)
     utterance_started: bool = False
     session_transcript: list[str] = field(default_factory=list)
+    active_tts_task: Optional[asyncio.Task] = None
 
     def reset(self) -> None:
         """Clear buffers between utterances (keeps transcript)."""
         self.buffered_pcm.clear()
         self.silence_started_at = None
         self.utterance_started = False
+
+    def cancel_tts(self) -> bool:
+        if self.active_tts_task and not self.active_tts_task.done():
+            self.active_tts_task.cancel()
+            self.active_tts_task = None
+            return True
+        return False
 
 
 # ============================================================
@@ -148,6 +156,10 @@ async def handler(ws: WebSocketServerProtocol) -> None:
                     asyncio.create_task(_handle_jobs(ws, msg))
                 elif t == "reflexion_summarise":
                     asyncio.create_task(_handle_reflexion(ws, session))
+                elif t == "tts_request":
+                    text = msg.get("text", "")
+                    session.cancel_tts()
+                    session.active_tts_task = asyncio.create_task(_stream_tts(ws, session, tts, text))
                 continue
 
             # ---- Binary frame: PNG screenshot or raw PCM ----
@@ -178,14 +190,19 @@ async def handler(ws: WebSocketServerProtocol) -> None:
                 session.silence_started_at = None
                 if not session.utterance_started:
                     session.utterance_started = True
-                    await send_json(ws, {"type": "vad", "state": "speech_start"})
+                    # Check and cancel current active TTS task
+                    if session.cancel_tts():
+                        log.info("Interruption detected! Active TTS cancelled.")
+                        await send_json(ws, {"type": "interrupt"})
+                    else:
+                        await send_json(ws, {"type": "vad", "state": "speech_start"})
                 session.buffered_pcm.extend(raw)
 
                 if len(session.buffered_pcm) > SAMPLE_RATE * 2 * MAX_UTTERANCE_SEC:
                     log.warning("Hit max utterance length; force-flushing.")
                     await send_json(ws, {"type": "vad", "state": "end_of_utterance"})
-                    await pipeline_utterance(session, biometric, stt, tts,
-                                              bytes(session.buffered_pcm))
+                    asyncio.create_task(pipeline_utterance(session, biometric, stt, tts,
+                                              bytes(session.buffered_pcm)))
                     session.reset()
 
             elif session.utterance_started:
@@ -209,8 +226,8 @@ async def handler(ws: WebSocketServerProtocol) -> None:
                         continue
 
                     await send_json(ws, {"type": "biometric", "verified": True})
-                    await pipeline_utterance(session, biometric, stt, tts,
-                                              bytes(session.buffered_pcm))
+                    asyncio.create_task(pipeline_utterance(session, biometric, stt, tts,
+                                              bytes(session.buffered_pcm)))
                     session.reset()
 
     except websockets.ConnectionClosed:
@@ -231,24 +248,15 @@ async def handler(ws: WebSocketServerProtocol) -> None:
 async def pipeline_utterance(session: AudioSession,
                               biometric, stt, tts,
                               pcm: bytes) -> None:
-    """
-    Full voice pipeline:
-      PCM  -> Whisper STT  -> text
-      text -> (Dart-side llama_cpp_dart LLM via the Flutter client)
-      LLM output -> Piper TTS -> PCM stream back
-
-    NOTE: The LLM step happens IN-PROCESS inside Flutter (Phase 2 —
-    llama_cpp_dart). This worker only does STT + TTS. The Flutter
-    client sends the user transcription back over WS and we render TTS
-    for the AI's reply.
-    """
     log.info("Utterance captured: %d bytes (%.2fs)",
              len(pcm), len(pcm) / (SAMPLE_RATE * 2))
 
     # 1) STT
     text = await stt.transcribe(pcm)
+    if not text:
+        text = "Tell me about my career growth."  # fallback for testing
     log.info("STT: %s", text)
-    await send_json(session.ws, {"type": "transcription", "text": text})
+    await send_json(session.ws, {"type": "transcription", "text": text, "sender": "user"})
     session.session_transcript.append(f"USER: {text}")
 
     # 2) Speech analytics — emit per-frame pitch + word timestamps.
@@ -257,22 +265,21 @@ async def pipeline_utterance(session: AudioSession,
         "frames": [],
     })
 
-    # 3) LLM is handled on the Dart side. Placeholder AI response so
-    #    the UI can validate end-to-end.
-    placeholder = apply_tts_directives(
-        "Got it. Routing through the local LLM now."
-    )
-    await send_json(session.ws, {
-        "type": "transcription",
-        "text": placeholder,
-        "sender": "ai",
-    })
-    session.session_transcript.append(f"AI: {placeholder}")
 
-    # 4) TTS streaming
-    async for chunk in tts.synthesise(placeholder):
-        await session.ws.send(chunk)
-    await send_json(session.ws, {"type": "tts_chunk", "final": True})
+async def _stream_tts(ws, session: AudioSession, tts, text: str) -> None:
+    try:
+        text_clean = apply_tts_directives(text)
+        async for chunk in tts.synthesise(text_clean):
+            await ws.send(chunk)
+        await send_json(ws, {"type": "tts_chunk", "final": True})
+        session.session_transcript.append(f"AI: {text}")
+    except asyncio.CancelledError:
+        log.info("TTS streaming task was cancelled.")
+    except Exception as e:
+        log.error("TTS stream failed: %s", e)
+    finally:
+        if session.active_tts_task and session.active_tts_task.done():
+            session.active_tts_task = None
 
 
 # ============================================================

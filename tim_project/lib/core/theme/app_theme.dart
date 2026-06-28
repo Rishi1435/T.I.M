@@ -10,9 +10,9 @@ class AppTheme {
   AppTheme._();
 
   // ---- Palette ----------------------------------------------------
-  static const Color _bg = Color(0xFF0F1115);
-  static const Color _surface = Color(0xFF171A21);
-  static const Color _surfaceVariant = Color(0xFF1F232C);
+  static const Color _bg = Color(0xFF000000);
+  static const Color _surface = Color(0xFF07080A);
+  static const Color _surfaceVariant = Color(0xFF0F1014);
   static const Color _primary = Color(0xFF8AB4F8);
   static const Color _onPrimary = Color(0xFF06111F);
   static const Color _accent = Color(0xFFE8F0FE);

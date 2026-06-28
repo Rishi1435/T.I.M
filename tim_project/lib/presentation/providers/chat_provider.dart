@@ -6,7 +6,9 @@
 // ============================================================
 
 import 'dart:async';
+import 'dart:typed_data';
 
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -35,6 +37,21 @@ class ChatMessage {
   final String text;
   final DateTime? timestamp;
   final List<FileChip> attachments;
+
+  ChatMessage copyWith({
+    String? id,
+    MessageSender? sender,
+    String? text,
+    DateTime? timestamp,
+    List<FileChip>? attachments,
+  }) =>
+      ChatMessage(
+        id: id ?? this.id,
+        sender: sender ?? this.sender,
+        text: text ?? this.text,
+        timestamp: timestamp ?? this.timestamp,
+        attachments: attachments ?? this.attachments,
+      );
 }
 
 enum VoiceState { idle, listening, verifying, speaking }
@@ -104,6 +121,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final Ref _ref;
   late final StreamSubscription<WsEvent> _sub;
   final Logger _log = Logger('ChatNotifier');
+  final _audioPlayer = AudioPlayer();
+  final List<int> _pcmBuffer = [];
 
   /// Update UI on every token for maximum perceived speed.
   static const int _uiUpdateEveryN = 1;
@@ -116,6 +135,100 @@ class ChatNotifier extends StateNotifier<ChatState> {
   void stopGeneration() {
     _cancelRequested = true;
     _llm.cancelGeneration();
+    _audioPlayer.stop();
+  }
+
+  void _runLlmForVoice(String text) async {
+    // Re-use logic from sendText to query local LLM
+    String ragContext = '';
+    final vault = _vaultCtrl.vault;
+    if (vault != null) {
+      try {
+        final queryEmb = LlmEngine.hashEmbed(text);
+        final memories = await vault.semanticSearch(queryEmb, k: 3);
+        if (memories.isNotEmpty) {
+          ragContext = memories.map((m) => '- ${m.content}').join('\n');
+        }
+      } catch (e) {
+        _log.warn('RAG search failed: $e');
+      }
+    }
+    final modelId = _ref.read(modelProvider).selected?.id ?? '';
+    final stopSeqs = _getStopSequences(modelId);
+    final prompt = _formatPrompt(modelId, state.messages, text, ragContext);
+
+    final aiMsgId = DateTime.now().microsecondsSinceEpoch.toString();
+    // Pre-add empty message for streaming response in UI
+    _addMessage(MessageSender.ai, '', id: aiMsgId, persist: false);
+    state = state.copyWith(isGenerating: true, streamingMessageId: aiMsgId);
+
+    var response = '';
+    try {
+      await for (final token in _llm.generate(prompt, stop: stopSeqs)) {
+        response += token;
+        // update UI
+        state = state.copyWith(
+          messages: state.messages.map((m) => m.id == aiMsgId ? m.copyWith(text: response) : m).toList(),
+        );
+      }
+      // Done streaming. Persist response and user message to DB safely.
+      if (vault != null) {
+        try {
+          final userMsgId = DateTime.now().microsecondsSinceEpoch.toString();
+          vault.insertChatMessage(id: userMsgId, sender: 'user', text: text);
+          vault.insertChatMessage(id: aiMsgId, sender: 'ai', text: response);
+          
+          // Trigger background memory insertion / reflexion indexing
+          _insertMemoriesBackground(text, response, vault);
+        } catch (e) {
+          _log.warn('Failed to save voice chat to DB: $e');
+        }
+      }
+      
+      // Now request TTS from the Python worker!
+      _ws.sendJson({
+        'type': 'tts_request',
+        'text': response,
+      });
+    } catch (e) {
+      _addSystem('AI reply generation failed: $e');
+    } finally {
+      state = state.copyWith(isGenerating: false, streamingMessageId: null);
+    }
+  }
+
+  Uint8List _createWavHeader(int numSamples, int sampleRate, int numChannels, int bitsPerSample) {
+    final header = ByteData(44);
+    final numBytes = numSamples * numChannels * (bitsPerSample ~/ 8);
+    
+    // "RIFF"
+    header.setUint32(0, 0x52494646, Endian.big);
+    // File size - 8
+    header.setUint32(4, 36 + numBytes, Endian.little);
+    // "WAVE"
+    header.setUint32(8, 0x57415645, Endian.big);
+    // "fmt "
+    header.setUint32(12, 0x666d7420, Endian.big);
+    // Subchunk1 Size (16 for PCM)
+    header.setUint32(16, 16, Endian.little);
+    // AudioFormat (1 for PCM)
+    header.setUint16(20, 1, Endian.little);
+    // NumChannels
+    header.setUint16(22, numChannels, Endian.little);
+    // SampleRate
+    header.setUint32(24, sampleRate, Endian.little);
+    // ByteRate
+    header.setUint32(28, sampleRate * numChannels * (bitsPerSample ~/ 8), Endian.little);
+    // BlockAlign
+    header.setUint16(32, numChannels * (bitsPerSample ~/ 8), Endian.little);
+    // BitsPerSample
+    header.setUint16(34, bitsPerSample, Endian.little);
+    // "data"
+    header.setUint32(36, 0x64617461, Endian.big);
+    // Subchunk2 Size
+    header.setUint32(40, numBytes, Endian.little);
+    
+    return header.buffer.asUint8List();
   }
 
   /// Load the last 100 messages from the vault and hydrate state.
@@ -155,11 +268,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
     String ragContext,
   ) {
     const systemInstruction =
-        'You are T.I.M. (This Is Me), a 100% offline, localized career mentor. '
-        'You run completely in-memory on the user\'s machine. Keep answers concise and direct. Push the user to grow. '
-        'Answer ONLY what was asked — do not simulate future dialogue. '
-        'If the user\'s memory profile is empty, do not say you don\'t have access to information. '
-        'Instead, warmly guide them to complete the "Genesis Onboarding" so you can learn their story.';
+        'Context: You are T.I.M. (This Is Me), a blunt, hyper-observant career and behavioral mentor running locally on a secure Windows system.\n'
+        'Request: Analyze the user\'s input, cross-reference their encrypted timeline, and provide brutal, constructive feedback.\n'
+        'Explanation: You do not write code for the user. You do not validate excuses. Your goal is to force the user to confront logical flaws and communication gaps. '
+        'If the user\'s memory profile/timeline is empty, guide them to complete the "Genesis Onboarding" so you can learn their story.\n'
+        'Action: Respond with direct, concise critiques. If the user makes a mistake, log a high-priority rule for future sessions.\n'
+        'Tone: Demanding, analytical, and strictly professional. No pleasantries. No emojis.\n'
+        'Extras: Always end by asking a probing question that forces the user to defend their reasoning.';
 
     final contextPart =
         ragContext.isNotEmpty ? 'Context:\n$ragContext\n' : '';
@@ -220,6 +335,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
         final s = e.payload['state'] as String?;
         if (s == 'speech_start') {
           state = state.copyWith(voice: VoiceState.listening);
+          _audioPlayer.stop();
+          _pcmBuffer.clear();
         } else if (s == 'end_of_utterance') {
           state = state.copyWith(voice: VoiceState.verifying);
         }
@@ -231,17 +348,41 @@ class ChatNotifier extends StateNotifier<ChatState> {
         }
       case WsEventType.transcription:
         final text = e.payload['text'] as String? ?? '';
+        final sender = e.payload['sender'] as String? ?? 'user';
         if (text.isNotEmpty) {
-          _addMessage(MessageSender.user, text);
-          if (ScreenWatcher.isTriggered(text)) {
-            _triggerScreenWatch();
+          if (sender == 'user') {
+            final userMsgId = DateTime.now().microsecondsSinceEpoch.toString();
+            _addMessage(MessageSender.user, text, id: userMsgId, persist: false);
+            if (ScreenWatcher.isTriggered(text)) {
+              _triggerScreenWatch();
+            }
+            _runLlmForVoice(text);
+          } else {
+            _addMessage(MessageSender.ai, text);
           }
         }
-        state = state.copyWith(voice: VoiceState.speaking);
       case WsEventType.ttsChunk:
+        final pcm = e.payload['pcm'] as Uint8List?;
+        if (pcm != null && pcm.isNotEmpty) {
+          _pcmBuffer.addAll(pcm);
+        }
         if (e.payload['final'] == true) {
           state = state.copyWith(voice: VoiceState.idle);
+          if (_pcmBuffer.isNotEmpty) {
+            _audioPlayer.stop().then((_) {
+              final builder = BytesBuilder()
+                ..add(_createWavHeader(_pcmBuffer.length ~/ 2, 16000, 1, 16))
+                ..add(_pcmBuffer);
+              _audioPlayer.play(BytesSource(builder.toBytes()));
+              _pcmBuffer.clear();
+            });
+          }
         }
+      case WsEventType.interrupt:
+        _audioPlayer.stop();
+        _pcmBuffer.clear();
+        state = state.copyWith(voice: VoiceState.listening);
+        _addSystem('AI interrupted by user voice.');
       case WsEventType.speechAnalytics:
         break;
       case WsEventType.screenVision:
@@ -599,6 +740,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
   @override
   void dispose() {
     _sub.cancel();
+    _audioPlayer.dispose();
     super.dispose();
   }
 }

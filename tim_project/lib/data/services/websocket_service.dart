@@ -27,6 +27,7 @@ enum WsEventType {
   reflexion,
   error,
   closed,
+  interrupt,
 }
 
 class WsEvent {
@@ -157,6 +158,8 @@ class WebSocketService {
         return WsEventType.reflexion;
       case 'error':
         return WsEventType.error;
+      case 'interrupt':
+        return WsEventType.interrupt;
       default:
         return WsEventType.error;
     }

@@ -5,6 +5,8 @@
 // provided (which derives the E2EE key).
 // ============================================================
 
+import 'dart:convert';
+
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -36,8 +38,8 @@ class VaultController extends StateNotifier<VaultState> {
       }
       _vault = LocalVault(userId: userId);
       await _vault!.open();
-      // Derive the E2EE key (used for cloud sync + .tim backups).
-      final salt = _crypto.newSalt();
+      // Derive the E2EE key deterministically from the user's UUID for device/session consistency.
+      final salt = utf8.encode(userId.replaceAll('-', '')).sublist(0, 16);
       _key = await _crypto.deriveKey(masterPassword, salt);
       state = VaultState.unlocked;
     } catch (e) {

@@ -370,9 +370,9 @@ class _LiveCallOverlay extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // Pull the LiveCallView widget up from the widgets layer so this
     // file stays focused on layout composition.
-    return Material(
-      color: Colors.black.withValues(alpha: 0.85),
-      child: const LiveCallView(),
+    return const Material(
+      color: Colors.black,
+      child: LiveCallView(),
     );
   }
 }

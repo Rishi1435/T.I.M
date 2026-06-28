@@ -11,6 +11,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:record/record.dart';
 
 import '../../data/services/speech_analytics.dart';
 import '../../data/services/websocket_service.dart';
@@ -24,6 +25,7 @@ class VoiceCallState {
     this.waveform = const [],
     this.lastReport,
     this.interruptionMessage,
+    this.error,
   });
 
   final bool active;
@@ -31,6 +33,7 @@ class VoiceCallState {
   final List<double> waveform; // last N samples for the animation
   final SpeechReport? lastReport;
   final String? interruptionMessage;
+  final String? error;
 
   VoiceCallState copyWith({
     bool? active,
@@ -38,6 +41,7 @@ class VoiceCallState {
     List<double>? waveform,
     SpeechReport? lastReport,
     String? interruptionMessage,
+    String? error,
   }) =>
       VoiceCallState(
         active: active ?? this.active,
@@ -45,6 +49,7 @@ class VoiceCallState {
         waveform: waveform ?? this.waveform,
         lastReport: lastReport ?? this.lastReport,
         interruptionMessage: interruptionMessage ?? this.interruptionMessage,
+        error: error ?? this.error,
       );
 }
 
@@ -63,9 +68,42 @@ class VoiceCallController extends StateNotifier<VoiceCallState> {
   late final Timer _timer;
   final _rng = Random();
 
-  void startCall() => state = state.copyWith(active: true);
-  void stopCall() =>
-      state = const VoiceCallState();
+  final _recorder = AudioRecorder();
+  StreamSubscription<Uint8List>? _recordSub;
+
+  Future<void> startCall() async {
+    if (state.active) return;
+    try {
+      final hasPermission = await _recorder.hasPermission();
+      if (!hasPermission) {
+        state = state.copyWith(error: 'Microphone permission denied');
+        return;
+      }
+      state = state.copyWith(active: true, error: null);
+
+      final recordStream = await _recorder.startStream(
+        const RecordConfig(
+          encoder: AudioEncoder.pcm16bits,
+          sampleRate: 16000,
+          numChannels: 1,
+        ),
+      );
+
+      _recordSub = recordStream.listen((data) {
+        _ws.sendAudio(data);
+      });
+    } catch (e) {
+      state = state.copyWith(active: false, error: 'Failed to start recording: $e');
+    }
+  }
+
+  Future<void> stopCall() async {
+    if (!state.active) return;
+    await _recordSub?.cancel();
+    _recordSub = null;
+    await _recorder.stop();
+    state = const VoiceCallState();
+  }
 
   void _onAnalytics(WsEvent e) {
     final frames = (e.payload['frames'] as List? ?? [])
@@ -96,6 +134,8 @@ class VoiceCallController extends StateNotifier<VoiceCallState> {
 
   @override
   void dispose() {
+    _recordSub?.cancel();
+    _recorder.dispose();
     _sub.cancel();
     _timer.cancel();
     super.dispose();
