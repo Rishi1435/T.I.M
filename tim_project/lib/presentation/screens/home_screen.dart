@@ -105,7 +105,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                   label: Text(
                                       '${p.totalRamGb.toStringAsFixed(0)}GB RAM • '
                                       '${p.dedicatedVramGb.toStringAsFixed(0)}GB VRAM • '
-                                      '${p.batteryPercent}%'),
+                                      '${p.batteryStatusString}'),
                                 ),
                               ),
                               loading: () => const SizedBox(

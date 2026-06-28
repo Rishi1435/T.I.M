@@ -31,6 +31,10 @@ class HardwareProfile {
   final bool isCharging;
   final String gpuName;
 
+  /// Human-readable representation of battery status, handling the Win32 '255' byte cap
+  /// for desktops / plugged-in laptops without a reporting battery driver.
+  String get batteryStatusString => batteryPercent == 255 ? 'Desktop / Plugged In' : '$batteryPercent%';
+
   /// True iff the host has enough RAM + (optional) VRAM for [model].
   bool canRun(AppConfigGgufModelLite model) {
     if (totalRamGb < model.minRamGb) return false;
@@ -49,7 +53,7 @@ class HardwareProfile {
   String toString() =>
       'HW(ram=${totalRamGb.toStringAsFixed(1)}GB '
       'vram=${dedicatedVramGb.toStringAsFixed(1)}GB '
-      'battery=$batteryPercent% charging=$isCharging '
+      'battery=$batteryStatusString charging=$isCharging '
       'gpu=$gpuName)';
 }
 

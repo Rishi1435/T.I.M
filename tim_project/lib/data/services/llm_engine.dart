@@ -28,6 +28,10 @@ class LlmEngine {
   LlamaParent? _model;
   bool _loading = false;
 
+  StreamSubscription<String>? _sub;
+  StreamSubscription? _compSub;
+  StreamController<String>? _controller;
+
   bool get isLoaded => _model != null;
   bool get isLoading => _loading;
 
@@ -86,6 +90,14 @@ class LlmEngine {
   void cancelGeneration() {
     _cancelled = true;
     _model?.stop();
+    _sub?.cancel();
+    _sub = null;
+    _compSub?.cancel();
+    _compSub = null;
+    if (_controller != null && !_controller!.isClosed) {
+      _controller!.close();
+    }
+    _controller = null;
   }
 
   /// Stream tokens for a chat-style completion using background isolate.
@@ -101,17 +113,29 @@ class LlmEngine {
 
     _cancelled = false;
 
+    // Cancel any previous active streams/subscriptions to prevent duplicate token rendering.
+    await _sub?.cancel();
+    _sub = null;
+    await _compSub?.cancel();
+    _compSub = null;
+    if (_controller != null && !_controller!.isClosed) {
+      await _controller!.close();
+    }
+    _controller = null;
+
     // Stop any active generation first
     await _model!.stop();
 
     // Set up a local stream controller for this generation session
     final controller = StreamController<String>();
+    _controller = controller;
 
     // Listen to the model stream and forward tokens to the controller
     final sub = _model!.stream.listen(
       (token) => controller.add(token),
       onError: (Object e, StackTrace s) => controller.addError(e, s),
     );
+    _sub = sub;
 
     // Listen for completion events to close the controller
     final compSub = _model!.completions.listen((event) {
@@ -119,6 +143,7 @@ class LlmEngine {
         controller.close();
       }
     });
+    _compSub = compSub;
 
     try {
       // Send prompt to background isolate
