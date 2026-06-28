@@ -148,7 +148,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
     }
   }
 
-  String _formatPrompt(String modelId, String text, String ragContext) {
+  String _formatPrompt(
+    String modelId,
+    List<ChatMessage> history,
+    String currentText,
+    String ragContext,
+  ) {
     const systemInstruction =
         'You are T.I.M. (This Is Me), a 100% offline, localized career mentor. '
         'You run completely in-memory on the user\'s machine. Keep answers concise and direct. Push the user to grow. '
@@ -159,18 +164,38 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final contextPart =
         ragContext.isNotEmpty ? 'Context:\n$ragContext\n' : '';
 
+    final prompt = StringBuffer();
+
     if (modelId.contains('llama3')) {
-      return '<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n'
-          '$systemInstruction\n$contextPart<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n'
-          '$text<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n';
+      // Llama 3 format
+      prompt.write('<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n'
+          '$systemInstruction\n$contextPart<|eot_id|>');
+      for (final msg in history) {
+        final role = msg.sender == MessageSender.user ? 'user' : 'assistant';
+        prompt.write('<|start_header_id|>$role<|end_header_id|>\n\n'
+            '${msg.text}<|eot_id|>');
+      }
+      prompt.write('<|start_header_id|>user<|end_header_id|>\n\n'
+          '$currentText<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n');
     } else if (modelId.contains('phi3')) {
-      return '<s><|system|>\n$systemInstruction\n$contextPart<|end|>\n'
-          '<|user|>\n$text<|end|>\n<|assistant|>\n';
+      // Phi 3 format
+      prompt.write('<s><|system|>\n$systemInstruction\n$contextPart<|end|>\n');
+      for (final msg in history) {
+        final role = msg.sender == MessageSender.user ? 'user' : 'assistant';
+        prompt.write('<|$role|>\n${msg.text}<|end|>\n');
+      }
+      prompt.write('<|user|>\n$currentText<|end|>\n<|assistant|>\n');
     } else {
       // Qwen / ChatML format (default)
-      return '<|im_start|>system\n$systemInstruction\n$contextPart<|im_end|>\n'
-          '<|im_start|>user\n$text<|im_end|>\n<|im_start|>assistant\n';
+      prompt.write('<|im_start|>system\n$systemInstruction\n$contextPart<|im_end|>\n');
+      for (final msg in history) {
+        final role = msg.sender == MessageSender.user ? 'user' : 'assistant';
+        prompt.write('<|im_start|>$role\n${msg.text}<|im_end|>\n');
+      }
+      prompt.write('<|im_start|>user\n$currentText<|im_end|>\n<|im_start|>assistant\n');
     }
+
+    return prompt.toString();
   }
 
   List<String> _getStopSequences(String modelId) {
@@ -241,6 +266,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     String text, {
     List<FileChip> attachments = const [],
     String? id,
+    bool persist = true,
   }) {
     final msgId = id ?? DateTime.now().microsecondsSinceEpoch.toString();
     final msg = ChatMessage(
@@ -253,7 +279,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     state = state.copyWith(messages: [...state.messages, msg]);
 
     // Persist to vault (fire-and-forget — non-blocking).
-    if (sender != MessageSender.system) {
+    if (persist && sender != MessageSender.system) {
       final vault = _vaultCtrl.vault;
       if (vault != null && text.isNotEmpty) {
         try {
@@ -314,7 +340,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     final attachments = state.pendingChips;
     final userMsgId = DateTime.now().microsecondsSinceEpoch.toString();
-    _addMessage(MessageSender.user, text, attachments: attachments, id: userMsgId);
+    // Decouple SQLite write from sending: user message added to UI state immediately, but written to DB later.
+    _addMessage(MessageSender.user, text, attachments: attachments, id: userMsgId, persist: false);
     state = state.copyWith(pendingChips: const []);
 
     if (!_llm.isLoaded) {
@@ -337,9 +364,25 @@ class ChatNotifier extends StateNotifier<ChatState> {
       }
     }
 
+    // Extract last 8 messages for context window prompt history
+    final history = state.messages
+        .where((m) =>
+            m.id != userMsgId &&
+            m.sender != MessageSender.system &&
+            m.text.isNotEmpty,)
+        .toList();
+    final recentHistory = history.length > 8
+        ? history.sublist(history.length - 8)
+        : history;
+
     final modelState = _ref.read(modelProvider);
     final modelId = modelState.selected?.id ?? 'qwen25-3b';
-    final formattedPrompt = _formatPrompt(modelId, text, ragContext);
+    final formattedPrompt = _formatPrompt(
+      modelId,
+      recentHistory,
+      text,
+      ragContext,
+    );
     final stopSeqs = _getStopSequences(modelId);
 
     final aiMsgId = DateTime.now().microsecondsSinceEpoch.toString();
@@ -417,22 +460,30 @@ class ChatNotifier extends StateNotifier<ChatState> {
         }).toList(),
       );
 
-      // ── Persist AI reply & background memory insertion ─────────
+      // ── Decoupled DB write: Persist user & AI messages safely after stream concludes ──
       final finalReply = finalText.trim();
-      if (finalReply.isNotEmpty && vault != null) {
-        // Persist the chat message record synchronously (cheap SQL write).
+      if (vault != null) {
         try {
-          vault.insertChatMessage(
-            id: aiMsgId,
-            sender: 'ai',
-            text: finalReply,
-          );
-        } catch (e) {
-          _log.warn('AI message persist failed: $e');
+          if (text.isNotEmpty) {
+            vault.insertChatMessage(
+              id: userMsgId,
+              sender: 'user',
+              text: text,
+            );
+          }
+          if (finalReply.isNotEmpty) {
+            vault.insertChatMessage(
+              id: aiMsgId,
+              sender: 'ai',
+              text: finalReply,
+            );
+          }
+        } catch (dbErr) {
+          _log.error('CRITICAL: Failed to save to local memory (chat message persist failed): $dbErr');
         }
 
         // Memory insertion is slow (embedding) — run in background.
-        if (!_cancelRequested) {
+        if (!_cancelRequested && finalReply.isNotEmpty) {
           unawaited(_insertMemoriesBackground(text, finalReply, vault));
         }
       }
@@ -452,12 +503,63 @@ class ChatNotifier extends StateNotifier<ChatState> {
           return m;
         }).toList(),
       );
+
+      // Decoupled DB write on error
+      if (vault != null) {
+        try {
+          if (text.isNotEmpty) {
+            vault.insertChatMessage(
+              id: userMsgId,
+              sender: 'user',
+              text: text,
+            );
+          }
+          vault.insertChatMessage(
+            id: aiMsgId,
+            sender: 'ai',
+            text: errText,
+          );
+        } catch (dbErr) {
+          _log.error('CRITICAL: Failed to save to local memory on generation error: $dbErr');
+        }
+      }
     } finally {
       state = state.copyWith(
         isGenerating: false,
         streamingMessageId: null,
       );
     }
+  }
+
+  List<String> _chunkText(String text, {int maxChunkSize = 500}) {
+    if (text.length <= maxChunkSize) return [text];
+    final chunks = <String>[];
+    final sentences = text.split(RegExp(r'(?<=[.!?])\s+'));
+    var currentChunk = StringBuffer();
+    for (final sentence in sentences) {
+      if (currentChunk.length + sentence.length > maxChunkSize) {
+        if (currentChunk.isNotEmpty) {
+          chunks.add(currentChunk.toString().trim());
+          currentChunk = StringBuffer();
+        }
+        if (sentence.length > maxChunkSize) {
+          var start = 0;
+          while (start < sentence.length) {
+            final end = (start + maxChunkSize).clamp(0, sentence.length);
+            chunks.add(sentence.substring(start, end).trim());
+            start = end;
+          }
+        } else {
+          currentChunk.write('$sentence ');
+        }
+      } else {
+        currentChunk.write('$sentence ');
+      }
+    }
+    if (currentChunk.isNotEmpty) {
+      chunks.add(currentChunk.toString().trim());
+    }
+    return chunks;
   }
 
   /// Insert RAG memories in the background using the fast hash embedder
@@ -468,19 +570,27 @@ class ChatNotifier extends StateNotifier<ChatState> {
     dynamic vault,
   ) async {
     try {
-      // Use fast hash embedder — no model inference call needed here.
-      final userEmb = LlmEngine.hashEmbed(userText);
-      await vault.insertMemory(
-        content: 'User said: $userText',
-        embedding: userEmb,
-        metadata: {'sender': 'user'},
-      );
-      final aiEmb = LlmEngine.hashEmbed(aiText);
-      await vault.insertMemory(
-        content: 'T.I.M. said: $aiText',
-        embedding: aiEmb,
-        metadata: {'sender': 'ai'},
-      );
+      // Chunk user text
+      final userChunks = _chunkText(userText);
+      for (final chunk in userChunks) {
+        final userEmb = LlmEngine.hashEmbed(chunk);
+        await vault.insertMemory(
+          content: 'User said: $chunk',
+          embedding: userEmb,
+          metadata: {'sender': 'user'},
+        );
+      }
+
+      // Chunk AI text
+      final aiChunks = _chunkText(aiText);
+      for (final chunk in aiChunks) {
+        final aiEmb = LlmEngine.hashEmbed(chunk);
+        await vault.insertMemory(
+          content: 'T.I.M. said: $chunk',
+          embedding: aiEmb,
+          metadata: {'sender': 'ai'},
+        );
+      }
     } catch (e) {
       _log.warn('Background memory insertion failed: $e');
     }

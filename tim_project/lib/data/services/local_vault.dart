@@ -159,26 +159,33 @@ class LocalVault {
     Map<String, dynamic> metadata = const {},
     List<double>? embedding,
   }) async {
-    final db = _db!;
-    final id = _uuid();
-    final emb = _encodeEmbedding(embedding);
-    db.prepare('''
-      INSERT INTO memories (id, content, metadata_json, embedding)
-      VALUES (?, ?, ?, ?)
-    ''').execute([id, content, jsonEncode(metadata), emb]);
+    print('DEBUG [LocalVault]: Attempting to insert memory. Content length=${content.length}');
+    try {
+      final db = _db!;
+      final id = _uuid();
+      final emb = _encodeEmbedding(embedding);
+      db.prepare('''
+        INSERT INTO memories (id, content, metadata_json, embedding)
+        VALUES (?, ?, ?, ?)
+      ''').execute([id, content, jsonEncode(metadata), emb]);
 
-    if (embedding != null && _vecAvailable) {
-      db.prepare('INSERT INTO memories_vec(rowid, embedding) VALUES (?, ?)')
-          .execute([db.lastInsertRowId, emb]);
+      if (embedding != null && _vecAvailable) {
+        db.prepare('INSERT INTO memories_vec(rowid, embedding) VALUES (?, ?)')
+            .execute([db.lastInsertRowId, emb]);
+      }
+      print('DEBUG [LocalVault]: Successfully inserted memory id=$id');
+      return Memory(
+        id: id,
+        userId: userId,
+        content: content,
+        metadata: metadata,
+        createdAt: DateTime.now(),
+        embedding: embedding,
+      );
+    } catch (e) {
+      print('CRITICAL [LocalVault]: Failed to insert memory - $e');
+      rethrow;
     }
-    return Memory(
-      id: id,
-      userId: userId,
-      content: content,
-      metadata: metadata,
-      createdAt: DateTime.now(),
-      embedding: embedding,
-    );
   }
 
   Future<List<Memory>> listRecent({int limit = 50}) async {
@@ -224,10 +231,17 @@ class LocalVault {
     required String sender, // 'user' | 'ai' | 'system'
     required String text,
   }) {
-    _db!.prepare('''
-      INSERT OR IGNORE INTO chat_messages (id, sender, text)
-      VALUES (?, ?, ?)
-    ''').execute([id, sender, text]);
+    print('DEBUG [LocalVault]: Attempting to insert chat message: id=$id, sender=$sender');
+    try {
+      _db!.prepare('''
+        INSERT OR IGNORE INTO chat_messages (id, sender, text)
+        VALUES (?, ?, ?)
+      ''').execute([id, sender, text]);
+      print('DEBUG [LocalVault]: Successfully inserted/ignored chat message: id=$id');
+    } catch (e) {
+      print('CRITICAL [LocalVault]: Failed to insert chat message - $e');
+      rethrow;
+    }
   }
 
   /// Load the most recent [limit] chat messages ordered oldest-first.
