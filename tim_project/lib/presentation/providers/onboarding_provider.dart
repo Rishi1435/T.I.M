@@ -161,19 +161,29 @@ $resumeText
   Future<void> confirmAll() async {
     final vault = _vault();
     if (vault == null) {
-      throw StateError('Vault not unlocked');
+      state = state.copyWith(
+        error: 'Vault not unlocked. Please log out and sign in again.',
+      );
+      return;
     }
     state = state.copyWith(phase: GenesisPhase.confirmed);
-    for (final b in state.blocks.where((b) => b.confirmed)) {
-      final emb = await _llm.embed(b.content);
-      await vault.insertMemory(
-        content: b.content,
-        metadata: {
-          'category': b.category,
-          ...b.metadata,
-          'source': 'genesis',
-        },
-        embedding: emb,
+    try {
+      for (final b in state.blocks.where((b) => b.confirmed)) {
+        final emb = await _llm.embed(b.content);
+        await vault.insertMemory(
+          content: b.content,
+          metadata: {
+            'category': b.category,
+            ...b.metadata,
+            'source': 'genesis',
+          },
+          embedding: emb,
+        );
+      }
+    } catch (e) {
+      state = state.copyWith(
+        phase: GenesisPhase.review,
+        error: 'Onboarding verification failed: $e',
       );
     }
   }
