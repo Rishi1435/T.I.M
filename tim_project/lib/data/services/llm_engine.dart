@@ -126,19 +126,21 @@ class LlmEngine {
     // Stop any active generation first
     await _model!.stop();
 
+    final scope = _model!.getScope();
+
     // Set up a local stream controller for this generation session
     final controller = StreamController<String>();
     _controller = controller;
 
-    // Listen to the model stream and forward tokens to the controller
-    final sub = _model!.stream.listen(
+    // Listen to the scope stream and forward tokens to the controller
+    final sub = scope.stream.listen(
       (token) => controller.add(token),
       onError: (Object e, StackTrace s) => controller.addError(e, s),
     );
     _sub = sub;
 
     // Listen for completion events to close the controller
-    final compSub = _model!.completions.listen((event) {
+    final compSub = scope.completions.listen((event) {
       if (!controller.isClosed) {
         controller.close();
       }
@@ -146,8 +148,8 @@ class LlmEngine {
     _compSub = compSub;
 
     try {
-      // Send prompt to background isolate
-      await _model!.sendPrompt(prompt);
+      // Send prompt to background isolate using the isolated scope
+      await scope.sendPrompt(prompt);
 
       var produced = 0;
       var accumulated = '';
@@ -168,7 +170,7 @@ class LlmEngine {
 
         if (shouldStop) {
           _log.info('Stop sequence "$stopSeqFound" detected; stopping generation.');
-          await _model!.stop();
+          await scope.stop();
           break;
         }
 
@@ -176,7 +178,7 @@ class LlmEngine {
         
         if (produced >= maxTokens) {
           _log.warn('Hit maxTokens=$maxTokens; stopping generation.');
-          await _model!.stop();
+          await scope.stop();
           break;
         }
       }
@@ -185,6 +187,11 @@ class LlmEngine {
       await compSub.cancel();
       if (!controller.isClosed) {
         await controller.close();
+      }
+      try {
+        await scope.dispose();
+      } catch (e) {
+        _log.warn('Failed to dispose model scope: $e');
       }
     }
   }

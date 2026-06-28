@@ -221,6 +221,49 @@ class LocalVault {
     }
   }
 
+  /// Delete a memory by id, clearing it from memories and memories_vec tables.
+  void deleteMemory(String id) {
+    print('DEBUG [LocalVault]: Attempting to delete memory id=$id');
+    try {
+      if (_vecAvailable) {
+        try {
+          _db!.prepare('DELETE FROM memories_vec WHERE rowid = (SELECT rowid FROM memories WHERE id = ?)')
+              .execute([id]);
+        } catch (e) {
+          _log.warn('Failed to delete from memories_vec: $e');
+        }
+      }
+      _db!.prepare('DELETE FROM memories WHERE id = ?').execute([id]);
+      print('DEBUG [LocalVault]: Successfully deleted memory id=$id');
+    } catch (e) {
+      print('CRITICAL [LocalVault]: Failed to delete memory - $e');
+      rethrow;
+    }
+  }
+
+  /// Update a memory content and optionally its embedding vector.
+  void updateMemory(String id, String content, List<double>? embedding) {
+    print('DEBUG [LocalVault]: Attempting to update memory id=$id');
+    try {
+      final emb = _encodeEmbedding(embedding);
+      _db!.prepare('UPDATE memories SET content = ?, embedding = ? WHERE id = ?')
+          .execute([content, emb, id]);
+      if (embedding != null && _vecAvailable) {
+        try {
+          _db!.prepare('UPDATE memories_vec SET embedding = ? WHERE rowid = (SELECT rowid FROM memories WHERE id = ?)')
+              .execute([emb, id]);
+        } catch (e) {
+          _log.warn('Failed to update memories_vec: $e');
+        }
+      }
+      print('DEBUG [LocalVault]: Successfully updated memory id=$id');
+    } catch (e) {
+      print('CRITICAL [LocalVault]: Failed to update memory - $e');
+      rethrow;
+    }
+  }
+
+
   // ============================================================
   // Chat history
   // ============================================================

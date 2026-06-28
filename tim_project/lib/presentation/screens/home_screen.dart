@@ -21,6 +21,7 @@ import '../widgets/voice_indicator.dart';
 import '../widgets/model_selection_dialog.dart';
 import 'genesis_screen.dart';
 import 'live_call_screen.dart';
+import 'profile_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -131,6 +132,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                   : Colors.redAccent,
                             ),
                             const SizedBox(width: 16),
+                            IconButton(
+                              tooltip: 'Profile & Memory Vault',
+                              icon: const Icon(Icons.account_circle, size: 18),
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const ProfileScreen(),
+                                  ),
+                                );
+                              },
+                            ),
+                            const SizedBox(width: 8),
                             IconButton(
                               tooltip: 'Sign out',
                               icon: const Icon(Icons.logout, size: 18),
