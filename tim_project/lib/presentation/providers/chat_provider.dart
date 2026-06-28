@@ -46,26 +46,41 @@ class ChatState {
     this.voice = VoiceState.idle,
     this.connected = false,
     this.pendingChips = const [],
+    this.isGenerating = false,
+    this.streamingMessageId,
   });
 
   final List<ChatMessage> messages;
   final VoiceState voice;
   final bool connected;
   final List<FileChip> pendingChips;
+  /// True while the LLM is streaming tokens.
+  final bool isGenerating;
+  /// The id of the message currently being streamed (if any).
+  final String? streamingMessageId;
 
   ChatState copyWith({
     List<ChatMessage>? messages,
     VoiceState? voice,
     bool? connected,
     List<FileChip>? pendingChips,
+    bool? isGenerating,
+    Object? streamingMessageId = _sentinel,
   }) =>
       ChatState(
         messages: messages ?? this.messages,
         voice: voice ?? this.voice,
         connected: connected ?? this.connected,
         pendingChips: pendingChips ?? this.pendingChips,
+        isGenerating: isGenerating ?? this.isGenerating,
+        streamingMessageId: identical(streamingMessageId, _sentinel)
+            ? this.streamingMessageId
+            : streamingMessageId as String?,
       );
 }
+
+// Sentinel so copyWith can explicitly null out streamingMessageId.
+const Object _sentinel = Object();
 
 /// Single shared [WebSocketService] instance.
 final webSocketProvider = Provider<WebSocketService>((ref) {
@@ -75,16 +90,98 @@ final webSocketProvider = Provider<WebSocketService>((ref) {
 });
 
 class ChatNotifier extends StateNotifier<ChatState> {
-  ChatNotifier(this._ws, this._llm, this._vaultCtrl) : super(const ChatState()) {
+  ChatNotifier(this._ws, this._llm, this._vaultCtrl, this._ref)
+      : super(const ChatState()) {
     _ws.connect();
     _sub = _ws.events.listen(_onEvent);
+    // Load persisted chat history from the vault once it's unlocked.
+    _loadHistory();
   }
 
   final WebSocketService _ws;
   final LlmEngine _llm;
   final VaultController _vaultCtrl;
+  final Ref _ref;
   late final StreamSubscription<WsEvent> _sub;
   final Logger _log = Logger('ChatNotifier');
+
+  /// Update UI on every token for maximum perceived speed.
+  static const int _uiUpdateEveryN = 1;
+  int _tokensSinceUpdate = 0;
+
+  /// Set to true when the user presses Stop to cancel an in-flight generation.
+  bool _cancelRequested = false;
+
+  /// Called by the UI Stop button to abort streaming.
+  void stopGeneration() {
+    _cancelRequested = true;
+    _llm.cancelGeneration();
+  }
+
+  /// Load the last 100 messages from the vault and hydrate state.
+  void _loadHistory() {
+    final vault = _vaultCtrl.vault;
+    if (vault == null) {
+      // Vault may not be unlocked yet; retry via a short delay.
+      Future.delayed(const Duration(milliseconds: 800), _loadHistory);
+      return;
+    }
+    try {
+      final rows = vault.loadChatHistory(limit: 100);
+      if (rows.isEmpty) return;
+      final msgs = rows.map((r) {
+        final sender = switch (r['sender']) {
+          'user' => MessageSender.user,
+          'ai' => MessageSender.ai,
+          _ => MessageSender.system,
+        };
+        return ChatMessage(
+          id: r['id']!,
+          sender: sender,
+          text: r['text']!,
+          timestamp: null,
+        );
+      }).toList();
+      state = state.copyWith(messages: msgs);
+    } catch (e) {
+      _log.warn('Failed to load chat history: $e');
+    }
+  }
+
+  String _formatPrompt(String modelId, String text, String ragContext) {
+    const systemInstruction =
+        'You are T.I.M. (This Is Me), a focused, no-nonsense personal AI mentor. '
+        'Keep answers concise and direct. Push the user to grow. '
+        'Answer ONLY what was asked — do not simulate future dialogue.';
+
+    final contextPart =
+        ragContext.isNotEmpty ? 'Context:\n$ragContext\n' : '';
+
+    if (modelId.contains('llama3')) {
+      return '<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n'
+          '$systemInstruction\n$contextPart<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n'
+          '$text<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n';
+    } else if (modelId.contains('phi3')) {
+      return '<s><|system|>\n$systemInstruction\n$contextPart<|end|>\n'
+          '<|user|>\n$text<|end|>\n<|assistant|>\n';
+    } else {
+      // Qwen / ChatML format (default)
+      return '<|im_start|>system\n$systemInstruction\n$contextPart<|im_end|>\n'
+          '<|im_start|>user\n$text<|im_end|>\n<|im_start|>assistant\n';
+    }
+  }
+
+  List<String> _getStopSequences(String modelId) {
+    final common = ['user message:', 'user:', 't.i.m.:'];
+    if (modelId.contains('llama3')) {
+      return [...common, '<|eot_id|>', '<|start_header_id|>'];
+    } else if (modelId.contains('phi3')) {
+      return [...common, '<|end|>', '<|user|>', '<|assistant|>'];
+    } else {
+      // ChatML / Qwen
+      return [...common, '<|im_end|>', '<|im_start|>'];
+    }
+  }
 
   void _onEvent(WsEvent e) {
     switch (e.type) {
@@ -119,7 +216,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
           state = state.copyWith(voice: VoiceState.idle);
         }
       case WsEventType.speechAnalytics:
-        // Handled by voice_provider; ignored here.
         break;
       case WsEventType.screenVision:
         final text = e.payload['analysis'] as String? ?? '';
@@ -127,7 +223,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
           _addMessage(MessageSender.ai, 'Screen watch:\n$text');
         }
       case WsEventType.jobListings:
-        // Forwarded to the job-scraper UI; ignored in the chat stream.
         break;
       case WsEventType.reflexion:
         final rule = e.payload['rule'] as String? ?? '';
@@ -135,7 +230,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
           _addMessage(MessageSender.system, 'Reflexion rule learned: $rule');
         }
       case WsEventType.error:
-        _addSystem('Error: ${e.payload['message']}');
         state = state.copyWith(voice: VoiceState.idle);
     }
   }
@@ -144,15 +238,33 @@ class ChatNotifier extends StateNotifier<ChatState> {
     MessageSender sender,
     String text, {
     List<FileChip> attachments = const [],
+    String? id,
   }) {
+    final msgId = id ?? DateTime.now().microsecondsSinceEpoch.toString();
     final msg = ChatMessage(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      id: msgId,
       sender: sender,
       text: text,
       timestamp: DateTime.now(),
       attachments: attachments,
     );
     state = state.copyWith(messages: [...state.messages, msg]);
+
+    // Persist to vault (fire-and-forget — non-blocking).
+    if (sender != MessageSender.system) {
+      final vault = _vaultCtrl.vault;
+      if (vault != null && text.isNotEmpty) {
+        try {
+          vault.insertChatMessage(
+            id: msgId,
+            sender: sender == MessageSender.user ? 'user' : 'ai',
+            text: text,
+          );
+        } catch (e) {
+          _log.warn('Chat message persist failed: $e');
+        }
+      }
+    }
   }
 
   void _addSystem(String text) => _addMessage(MessageSender.system, text);
@@ -195,8 +307,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
   /// Local text-send path (when not using voice).
   void sendText(String text) async {
     if (text.trim().isEmpty && state.pendingChips.isEmpty) return;
+    // Don't allow sending while already generating.
+    if (state.isGenerating) return;
+
     final attachments = state.pendingChips;
-    _addMessage(MessageSender.user, text, attachments: attachments);
+    final userMsgId = DateTime.now().microsecondsSinceEpoch.toString();
+    _addMessage(MessageSender.user, text, attachments: attachments, id: userMsgId);
     state = state.copyWith(pendingChips: const []);
 
     if (!_llm.isLoaded) {
@@ -204,11 +320,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
       return;
     }
 
+    // ── RAG: use fast hash embedder (non-blocking, no model call) ──
     String ragContext = '';
     final vault = _vaultCtrl.vault;
     if (vault != null) {
       try {
-        final queryEmb = await _llm.embed(text);
+        final queryEmb = LlmEngine.hashEmbed(text);
         final memories = await vault.semanticSearch(queryEmb, k: 3);
         if (memories.isNotEmpty) {
           ragContext = memories.map((m) => '- ${m.content}').join('\n');
@@ -218,72 +335,152 @@ class ChatNotifier extends StateNotifier<ChatState> {
       }
     }
 
-    final systemPrompt = '''
-You are T.I.M. (This Is Me), a personalized career mentor.
-You learn exclusively from the user. Be direct, force them to confront their flaws, and correct their communication.
-
-${ragContext.isNotEmpty ? 'Relevant context from memory:\n$ragContext\n' : ''}
-User message: $text
-T.I.M.:''';
+    final modelState = _ref.read(modelProvider);
+    final modelId = modelState.selected?.id ?? 'qwen25-3b';
+    final formattedPrompt = _formatPrompt(modelId, text, ragContext);
+    final stopSeqs = _getStopSequences(modelId);
 
     final aiMsgId = DateTime.now().microsecondsSinceEpoch.toString();
     var responseText = '';
-    
+    _cancelRequested = false;
+    _tokensSinceUpdate = 0;
+
     final initialAiMsg = ChatMessage(
       id: aiMsgId,
       sender: MessageSender.ai,
       text: '',
       timestamp: DateTime.now(),
     );
-    state = state.copyWith(messages: [...state.messages, initialAiMsg]);
+    state = state.copyWith(
+      messages: [...state.messages, initialAiMsg],
+      isGenerating: true,
+      streamingMessageId: aiMsgId,
+    );
 
     try {
-      await for (final token in _llm.generate(systemPrompt)) {
+      await for (final token in _llm.generate(
+        formattedPrompt,
+        stop: stopSeqs,
+        // Higher token budget for richer answers; stop seqs handle early exit.
+        maxTokens: 800,
+        temperature: 0.65,
+      )) {
+        if (_cancelRequested) break;
         responseText += token;
-        state = state.copyWith(
-          messages: state.messages.map((m) {
-            if (m.id == aiMsgId) {
-              return ChatMessage(
-                id: aiMsgId,
-                sender: MessageSender.ai,
-                text: responseText,
-                timestamp: m.timestamp,
-              );
-            }
-            return m;
-          }).toList(),
-        );
+        _tokensSinceUpdate++;
+
+        // Clean stop sequences from the accumulated text.
+        var cleanText = responseText;
+        for (final seq in stopSeqs) {
+          final idx = cleanText.toLowerCase().indexOf(seq.toLowerCase());
+          if (idx != -1) cleanText = cleanText.substring(0, idx);
+        }
+
+        // ── Update UI on every token for smooth streaming ────────
+        if (_tokensSinceUpdate >= _uiUpdateEveryN) {
+          _tokensSinceUpdate = 0;
+          state = state.copyWith(
+            messages: state.messages.map((m) {
+              if (m.id == aiMsgId) {
+                return ChatMessage(
+                  id: aiMsgId,
+                  sender: MessageSender.ai,
+                  text: cleanText,
+                  timestamp: m.timestamp,
+                );
+              }
+              return m;
+            }).toList(),
+          );
+        }
       }
-      
-      if (vault != null) {
-        final userEmb = await _llm.embed(text);
-        await vault.insertMemory(
-          content: 'User said: $text',
-          embedding: userEmb,
-          metadata: {'sender': 'user'},
-        );
-        final aiEmb = await _llm.embed(responseText);
-        await vault.insertMemory(
-          content: 'T.I.M. said: $responseText',
-          embedding: aiEmb,
-          metadata: {'sender': 'ai'},
-        );
+
+      // Final UI flush (in case last batch < _uiUpdateEveryN tokens).
+      var finalText = responseText;
+      for (final seq in stopSeqs) {
+        final idx = finalText.toLowerCase().indexOf(seq.toLowerCase());
+        if (idx != -1) finalText = finalText.substring(0, idx);
       }
-    } catch (e) {
-      _log.error('LLM generation error', e);
       state = state.copyWith(
         messages: state.messages.map((m) {
           if (m.id == aiMsgId) {
             return ChatMessage(
               id: aiMsgId,
               sender: MessageSender.ai,
-              text: '$responseText\n[Generation error: $e]',
+              text: finalText.trim(),
               timestamp: m.timestamp,
             );
           }
           return m;
         }).toList(),
       );
+
+      // ── Persist AI reply & background memory insertion ─────────
+      final finalReply = finalText.trim();
+      if (finalReply.isNotEmpty && vault != null) {
+        // Persist the chat message record synchronously (cheap SQL write).
+        try {
+          vault.insertChatMessage(
+            id: aiMsgId,
+            sender: 'ai',
+            text: finalReply,
+          );
+        } catch (e) {
+          _log.warn('AI message persist failed: $e');
+        }
+
+        // Memory insertion is slow (embedding) — run in background.
+        if (!_cancelRequested) {
+          unawaited(_insertMemoriesBackground(text, finalReply, vault));
+        }
+      }
+    } catch (e) {
+      _log.error('LLM generation error', e);
+      final errText = responseText.isEmpty ? '[Generation failed: $e]' : responseText.trim();
+      state = state.copyWith(
+        messages: state.messages.map((m) {
+          if (m.id == aiMsgId) {
+            return ChatMessage(
+              id: aiMsgId,
+              sender: MessageSender.ai,
+              text: errText,
+              timestamp: m.timestamp,
+            );
+          }
+          return m;
+        }).toList(),
+      );
+    } finally {
+      state = state.copyWith(
+        isGenerating: false,
+        streamingMessageId: null,
+      );
+    }
+  }
+
+  /// Insert RAG memories in the background using the fast hash embedder
+  /// so it doesn't block the UI or the next message send.
+  Future<void> _insertMemoriesBackground(
+    String userText,
+    String aiText,
+    dynamic vault,
+  ) async {
+    try {
+      // Use fast hash embedder — no model inference call needed here.
+      final userEmb = LlmEngine.hashEmbed(userText);
+      await vault.insertMemory(
+        content: 'User said: $userText',
+        embedding: userEmb,
+        metadata: {'sender': 'user'},
+      );
+      final aiEmb = LlmEngine.hashEmbed(aiText);
+      await vault.insertMemory(
+        content: 'T.I.M. said: $aiText',
+        embedding: aiEmb,
+        metadata: {'sender': 'ai'},
+      );
+    } catch (e) {
+      _log.warn('Background memory insertion failed: $e');
     }
   }
 
@@ -299,5 +496,5 @@ final chatProvider =
   final ws = ref.watch(webSocketProvider);
   final llm = ref.watch(llmEngineProvider);
   final vaultCtrl = ref.watch(vaultProvider.notifier);
-  return ChatNotifier(ws, llm, vaultCtrl);
+  return ChatNotifier(ws, llm, vaultCtrl, ref);
 });
