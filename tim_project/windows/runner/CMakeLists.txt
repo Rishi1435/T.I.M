@@ -36,5 +36,60 @@ target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib" "dxgi.lib" "windowscodecs.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
+# ---- Compile unified llama.dll from local source ----
+# Since llama_cpp_dart expects a single DLL that exports both llama_* and ggml_*
+# symbols, and official llama.cpp builds split them, we build them here.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+set(GGML_OPENCL OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
+# Temporarily disable installation rules for the llama.cpp subprojects 
+# since they don't support generator expressions in CMAKE_INSTALL_PREFIX.
+set(OLD_SKIP_INSTALL_RULES ${CMAKE_SKIP_INSTALL_RULES})
+set(CMAKE_SKIP_INSTALL_RULES ON)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../llama_src" llama_src_build EXCLUDE_FROM_ALL)
+set(CMAKE_SKIP_INSTALL_RULES ${OLD_SKIP_INSTALL_RULES})
+
+# Force symbols in static libraries to be decorated as __declspec(dllexport).
+# When compiled with these defines, the MSVC compiler generates dll export attributes.
+target_compile_definitions(llama PRIVATE LLAMA_BUILD LLAMA_SHARED GGML_SHARED GGML_USE_CPU)
+target_compile_definitions(ggml PRIVATE GGML_BUILD GGML_SHARED GGML_USE_CPU)
+target_compile_definitions(ggml-base PRIVATE GGML_BUILD GGML_SHARED GGML_USE_CPU)
+target_compile_definitions(ggml-cpu PRIVATE GGML_BUILD GGML_SHARED GGML_USE_CPU)
+
+# Disable MSVC warnings and enable parallel compilation to prevent build log bloat & speed up compilation
+if (MSVC)
+  target_compile_options(llama PRIVATE /MP /wd4005 /wd4018 /wd4101 /wd4244 /wd4267 /wd4305 /wd4702 /wd4996)
+  target_compile_options(ggml PRIVATE /MP)
+  target_compile_options(ggml-base PRIVATE /MP)
+  target_compile_options(ggml-cpu PRIVATE /MP)
+endif()
+
+# Build a unified DLL target llama_shared that outputs llama.dll.
+add_library(llama_shared SHARED "dummy.cpp")
+set_target_properties(llama_shared PROPERTIES OUTPUT_NAME "llama")
+
+# Link the static libraries.
+target_link_libraries(llama_shared PRIVATE llama ggml ggml-base ggml-cpu)
+
+# Force MSVC to load all objects from the static archives so decorated exports are included.
+target_link_options(llama_shared PRIVATE 
+  "/WHOLEARCHIVE:llama" 
+  "/WHOLEARCHIVE:ggml" 
+  "/WHOLEARCHIVE:ggml-base" 
+  "/WHOLEARCHIVE:ggml-cpu"
+)
+
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+
+# Make the executable depend on llama_shared DLL build.
+add_dependencies(${BINARY_NAME} llama_shared)
+
+# Install the compiled llama.dll next to the executable.
+install(TARGETS llama_shared RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}" COMPONENT Runtime)
+

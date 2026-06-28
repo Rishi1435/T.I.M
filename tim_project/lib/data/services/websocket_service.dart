@@ -43,6 +43,8 @@ class WebSocketService {
   StreamController<WsEvent>? _controller;
   bool _disposed = false;
   int _reconnectBackoffSec = 1;
+  bool _wasConnected = false;
+  bool _loggedInitialFailure = false;
 
   /// Broadcast stream of typed events.
   Stream<WsEvent> get events =>
@@ -51,12 +53,35 @@ class WebSocketService {
   /// Connect to the local Python worker.
   Future<void> connect() async {
     if (_channel != null) return;
-    _log.info('Connecting to ${AppConfig.wsUrl}');
+    _log.debug('Connecting to ${AppConfig.wsUrl}');
     final uri = Uri.parse(AppConfig.wsUrl);
     _channel = WebSocketChannel.connect(uri);
+    
+    _channel!.ready.then((_) {
+      if (!_wasConnected) {
+        _log.info('WS connected successfully.');
+        _wasConnected = true;
+        _loggedInitialFailure = false;
+      }
+    }).catchError((Object e) {
+      if (_wasConnected) {
+        _log.warn('WS connection lost: $e');
+        _wasConnected = false;
+      } else if (!_loggedInitialFailure) {
+        _log.warn('WS connection failed: T.I.M. Python worker is offline. (Retrying in background...)');
+        _loggedInitialFailure = true;
+      } else {
+        _log.debug('WS connection failed: $e');
+      }
+    });
 
     _channel!.stream.listen(
       (data) {
+        if (!_wasConnected) {
+          _log.info('WS connected successfully.');
+          _wasConnected = true;
+          _loggedInitialFailure = false;
+        }
         if (data is String) {
           final obj = jsonDecode(data) as Map<String, dynamic>;
           final type = _parseType(obj['type'] as String?);
@@ -75,11 +100,20 @@ class WebSocketService {
         }
       },
       onError: (Object? e, StackTrace s) {
-        _log.error('WS error', e, s);
+        if (_wasConnected) {
+          _log.warn('WS stream error: $e');
+        } else {
+          _log.debug('WS stream error: $e');
+        }
         _controller?.add(WsEvent(WsEventType.error, {'message': '$e'}));
       },
       onDone: () {
-        _log.info('WS closed');
+        if (_wasConnected) {
+          _log.info('WS closed');
+          _wasConnected = false;
+        } else {
+          _log.debug('WS closed');
+        }
         _controller?.add(WsEvent(WsEventType.closed, {}));
         _channel = null;
         if (!_disposed) {

@@ -10,7 +10,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/theme/app_theme.dart';
 import 'presentation/providers/auth_provider.dart';
-import 'presentation/screens/genesis_screen.dart';
 import 'presentation/screens/home_screen.dart';
 import 'presentation/screens/login_screen.dart';
 
@@ -41,7 +40,6 @@ class _PostAuthRouter extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final onboardingDone = ref.watch(onboardingCompletedProvider);
-    return onboardingDone ? const HomeScreen() : const GenesisScreen();
+    return const HomeScreen();
   }
 }

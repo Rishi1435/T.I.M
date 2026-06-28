@@ -40,6 +40,7 @@ class LocalVault {
   final String userId;
   final Logger _log;
   Database? _db;
+  bool _vecAvailable = false;
 
   /// Open (or create) the vault for [userId]. Idempotent.
   Future<void> open() async {
@@ -49,8 +50,8 @@ class LocalVault {
     final path = p.join(dir.path, TimConstants.vaultDbName);
     _log.info('Opening vault at $path');
     _db = sqlite3.open(path);
-    _migrate();
     _loadVecExtension();
+    _migrate();
   }
 
   Future<Directory> _vaultDir() async {
@@ -111,16 +112,28 @@ class LocalVault {
       );
     ''');
 
+    // ── Chat history ────────────────────────────────────────────
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id          TEXT PRIMARY KEY,
+        sender      TEXT NOT NULL,
+        text        TEXT NOT NULL,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    ''');
+
     // sqlite-vec virtual table for memories.
     // vec0 stores a rowid + a fixed-dim float vector.
-    db.execute('''
-      CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec
-      USING vec0(embedding float[${TimConstants.embeddingDim}]);
-    ''');
-    db.execute('''
-      CREATE VIRTUAL TABLE IF NOT EXISTS reflexion_vec
-      USING vec0(embedding float[${TimConstants.embeddingDim}]);
-    ''');
+    if (_vecAvailable) {
+      db.execute('''
+        CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec
+        USING vec0(embedding float[${TimConstants.embeddingDim}]);
+      ''');
+      db.execute('''
+        CREATE VIRTUAL TABLE IF NOT EXISTS reflexion_vec
+        USING vec0(embedding float[${TimConstants.embeddingDim}]);
+      ''');
+    }
   }
 
   void _loadVecExtension() {
@@ -129,8 +142,10 @@ class LocalVault {
       sqlite3.ensureExtensionLoaded(
         SqliteExtension.inLibrary(library, 'sqlite3_vec_init'),
       );
+      _vecAvailable = true;
       _log.info('sqlite-vec extension loaded.');
     } catch (e) {
+      _vecAvailable = false;
       _log.warn('sqlite-vec extension not available ($e). '
                 'Semantic search will be disabled until vec0.dll is provisioned.');
     }
@@ -152,7 +167,7 @@ class LocalVault {
       VALUES (?, ?, ?, ?)
     ''').execute([id, content, jsonEncode(metadata), emb]);
 
-    if (embedding != null) {
+    if (embedding != null && _vecAvailable) {
       db.prepare('INSERT INTO memories_vec(rowid, embedding) VALUES (?, ?)')
           .execute([db.lastInsertRowId, emb]);
     }
@@ -179,6 +194,9 @@ class LocalVault {
     List<double> queryEmbedding, {
     int k = 8,
   }) async {
+    if (!_vecAvailable) {
+      return listRecent(limit: k);
+    }
     final emb = _encodeEmbedding(queryEmbedding);
     try {
       final rows = _db!.prepare('''
@@ -194,6 +212,38 @@ class LocalVault {
       _log.warn('vec KNN failed ($e); falling back to recent.');
       return listRecent(limit: k);
     }
+  }
+
+  // ============================================================
+  // Chat history
+  // ============================================================
+
+  /// Persist a single chat message to disk.
+  void insertChatMessage({
+    required String id,
+    required String sender, // 'user' | 'ai' | 'system'
+    required String text,
+  }) {
+    _db!.prepare('''
+      INSERT OR IGNORE INTO chat_messages (id, sender, text)
+      VALUES (?, ?, ?)
+    ''').execute([id, sender, text]);
+  }
+
+  /// Load the most recent [limit] chat messages ordered oldest-first.
+  List<Map<String, String>> loadChatHistory({int limit = 100}) {
+    final rows = _db!.prepare(
+      'SELECT id, sender, text, created_at FROM chat_messages '
+      'ORDER BY created_at DESC LIMIT ?',
+    ).select([limit]);
+    // Reverse so oldest is first
+    return rows.reversed
+        .map((r) => {
+              'id': r['id'] as String,
+              'sender': r['sender'] as String,
+              'text': r['text'] as String,
+            },)
+        .toList();
   }
 
   // ============================================================
@@ -245,7 +295,7 @@ class LocalVault {
       INSERT INTO reflexion_rules (id, summary, priority, embedding)
       VALUES (?, ?, ?, ?)
     ''').execute([id, summary, priority, emb]);
-    if (embedding != null) {
+    if (embedding != null && _vecAvailable) {
       _db!.prepare('INSERT INTO reflexion_vec(rowid, embedding) VALUES (?, ?)')
           .execute([_db!.lastInsertRowId, emb]);
     }

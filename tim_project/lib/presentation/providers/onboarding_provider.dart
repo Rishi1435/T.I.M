@@ -56,20 +56,24 @@ class GenesisState {
     this.phase = GenesisPhase.blank,
     this.blocks = const [],
     this.extracting = false,
+    this.error,
   });
   final GenesisPhase phase;
   final List<MemoryBlock> blocks;
   final bool extracting;
+  final String? error;
 
   GenesisState copyWith({
     GenesisPhase? phase,
     List<MemoryBlock>? blocks,
     bool? extracting,
+    String? error,
   }) =>
       GenesisState(
         phase: phase ?? this.phase,
         blocks: blocks ?? this.blocks,
         extracting: extracting ?? this.extracting,
+        error: error,
       );
 }
 
@@ -83,7 +87,15 @@ class GenesisController extends StateNotifier<GenesisState> {
   /// Called when the user drops a resume (PDF text). Sends the text
   /// to the LLM and asks it to extract draft Memory Blocks.
   Future<void> extractFromResume(String resumeText) async {
-    state = state.copyWith(phase: GenesisPhase.drafting, extracting: true);
+    // Guard: model must be loaded before we can generate.
+    if (!_llm.isLoaded) {
+      state = state.copyWith(
+        phase: GenesisPhase.blank,
+        error: 'No AI model loaded yet. Please download a model first.',
+      );
+      return;
+    }
+    state = state.copyWith(phase: GenesisPhase.drafting, extracting: true, error: null);
     final prompt = '''
 You are T.I.M.'s Genesis extractor. Given the resume below, extract
 factual memory blocks. Output STRICT JSON: a list of objects with
@@ -93,16 +105,24 @@ project, skill. Do NOT invent facts. If unsure, omit.
 RESUME:
 $resumeText
 ''';
-    final buf = StringBuffer();
-    await for (final tok in _llm.generate(prompt, maxTokens: 800)) {
-      buf.write(tok);
+    try {
+      final buf = StringBuffer();
+      await for (final tok in _llm.generate(prompt, maxTokens: 800)) {
+        buf.write(tok);
+      }
+      final blocks = _parseBlocks(buf.toString());
+      state = state.copyWith(
+        phase: GenesisPhase.review,
+        blocks: blocks,
+        extracting: false,
+      );
+    } catch (e) {
+      state = state.copyWith(
+        phase: GenesisPhase.blank,
+        extracting: false,
+        error: 'Extraction failed: $e',
+      );
     }
-    final blocks = _parseBlocks(buf.toString());
-    state = state.copyWith(
-      phase: GenesisPhase.review,
-      blocks: blocks,
-      extracting: false,
-    );
   }
 
   /// Manually add a Memory Block (user types it themselves).

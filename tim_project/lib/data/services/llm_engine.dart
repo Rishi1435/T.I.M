@@ -25,13 +25,13 @@ class LlmEngine {
   LlmEngine() : _log = Logger('LlmEngine');
 
   final Logger _log;
-  Llama? _model;
+  LlamaParent? _model;
   bool _loading = false;
 
   bool get isLoaded => _model != null;
   bool get isLoading => _loading;
 
-  /// Load a .gguf model from disk into process memory.
+  /// Load a .gguf model from disk into process memory in a background isolate.
   /// Throws if the path doesn't exist or the file is corrupt.
   Future<void> loadModel(
     String ggufPath, {
@@ -47,7 +47,7 @@ class LlmEngine {
     }
     _loading = true;
     try {
-      _log.info('Loading model: $ggufPath '
+      _log.info('Loading model in background isolate: $ggufPath '
                 '(ctx=$contextTokens, gpu_layers=$gpuLayers)');
       // llama_cpp_dart on Windows uses DynamicLibrary.process() by default,
       // which requires llama symbols to be linked into the exe — they aren't.
@@ -56,73 +56,128 @@ class LlmEngine {
       if (Platform.isWindows) {
         Llama.libraryPath = 'llama.dll';
       }
-      // Wrap in Future to avoid blocking the UI thread during disk I/O.
-      _model = await Future(() {
-        final modelParams = ModelParams()..nGpuLayers = gpuLayers;
-        final contextParams = ContextParams()
-          ..nCtx = contextTokens
-          ..nThreads = Platform.numberOfProcessors;
-        return Llama(
-          ggufPath,
-          modelParams: modelParams,
-          contextParams: contextParams,
-        );
-      });
-      _log.info('Model loaded.');
+
+      final modelParams = ModelParams()
+        ..nGpuLayers = gpuLayers
+        ..mainGpu = -1;
+      final contextParams = ContextParams()
+        ..nCtx = contextTokens
+        ..nThreads = Platform.numberOfProcessors;
+
+      final loadCommand = LlamaLoad(
+        path: ggufPath,
+        modelParams: modelParams,
+        contextParams: contextParams,
+        samplingParams: SamplerParams(),
+      );
+
+      final parent = LlamaParent(loadCommand);
+      _model = parent;
+      await parent.init();
+      _log.info('Model loaded successfully.');
     } finally {
       _loading = false;
     }
   }
 
-  /// Stream tokens for a chat-style completion.
+  bool _cancelled = false;
+
+  /// Abort any in-flight generation. Safe to call from outside the isolate.
+  void cancelGeneration() {
+    _cancelled = true;
+    _model?.stop();
+  }
+
+  /// Stream tokens for a chat-style completion using background isolate.
   Stream<String> generate(
     String prompt, {
     int maxTokens = 512,
     double temperature = 0.7,
+    List<String> stop = const [],
   }) async* {
     if (_model == null) {
       throw StateError('LLM not loaded. Call loadModel() first.');
     }
+
+    _cancelled = false;
+
+    // Stop any active generation first
+    await _model!.stop();
+
+    // Set up a local stream controller for this generation session
     final controller = StreamController<String>();
-    try {
-      _model!.setPrompt(prompt);
-    } catch (e, s) {
-      controller.addError(e, s);
-    }
-    final sub = _model!.generateText().listen(
+
+    // Listen to the model stream and forward tokens to the controller
+    final sub = _model!.stream.listen(
       (token) => controller.add(token),
       onError: (Object e, StackTrace s) => controller.addError(e, s),
-      onDone: () => controller.close(),
-      cancelOnError: true,
     );
-    // Safety cap: cancel after maxTokens to prevent runaway.
-    var produced = 0;
-    await for (final tok in controller.stream) {
-      produced++;
-      yield tok;
-      if (produced >= maxTokens) {
-        _log.warn('Hit maxTokens=$maxTokens; stopping generation.');
-        break;
+
+    // Listen for completion events to close the controller
+    final compSub = _model!.completions.listen((event) {
+      if (!controller.isClosed) {
+        controller.close();
+      }
+    });
+
+    try {
+      // Send prompt to background isolate
+      await _model!.sendPrompt(prompt);
+
+      var produced = 0;
+      var accumulated = '';
+      await for (final token in controller.stream) {
+        if (_cancelled) break;
+        produced++;
+        accumulated += token;
+
+        bool shouldStop = false;
+        String stopSeqFound = '';
+        for (final seq in stop) {
+          if (accumulated.toLowerCase().contains(seq.toLowerCase())) {
+            shouldStop = true;
+            stopSeqFound = seq;
+            break;
+          }
+        }
+
+        if (shouldStop) {
+          _log.info('Stop sequence "$stopSeqFound" detected; stopping generation.');
+          await _model!.stop();
+          break;
+        }
+
+        yield token;
+        
+        if (produced >= maxTokens) {
+          _log.warn('Hit maxTokens=$maxTokens; stopping generation.');
+          await _model!.stop();
+          break;
+        }
+      }
+    } finally {
+      await sub.cancel();
+      await compSub.cancel();
+      if (!controller.isClosed) {
+        await controller.close();
       }
     }
-    await sub.cancel();
   }
 
+
+
   /// Compute a 384-dim embedding for `text` (used by sqlite-vec).
-  /// Implementation note: when the loaded model is a pure causal LM
-  /// without an embedding head, llama_cpp_dart returns an empty list.
-  /// The Antigravity IDE agent should either ship a separate bge-small
-  /// GGUF for embeddings, or fall back to a hashing embedder.
   Future<List<double>> embed(String text) async {
     if (_model == null) {
-      // Fallback: trivial hash-based embedder (deterministic, dim=384).
-      return _hashEmbed(text, TimConstants.embeddingDim);
+      return hashEmbed(text);
     }
-    final emb = _model!.getEmbeddings(text);
-    if (emb.isEmpty) {
-      return _hashEmbed(text, TimConstants.embeddingDim);
+    try {
+      final emb = await _model!.getEmbeddings(text);
+      if (emb.isEmpty) return hashEmbed(text);
+      return emb;
+    } catch (_) {
+      return hashEmbed(text);
     }
-    return emb;
   }
 
   /// Unload the model and free native memory.
@@ -132,11 +187,14 @@ class LlmEngine {
     _log.info('Model unloaded.');
   }
 
-  // ---- fallback embedder -----------------------------------------
+  // ---- fast hash embedder (public) --------------------------
   /// Deterministic hash-based embedder. NOT semantically meaningful —
-  /// only used as a placeholder so the RAG pipeline can be exercised
-  /// end-to-end before a real embedding model is provisioned.
-  static List<double> _hashEmbed(String text, int dim) {
+  /// used as a fast, synchronous fallback so the RAG pipeline can run
+  /// without blocking on the LLM isolate.
+  static List<double> hashEmbed(String text) =>
+      _hashEmbedImpl(text, TimConstants.embeddingDim);
+
+  static List<double> _hashEmbedImpl(String text, int dim) {
     final out = List<double>.filled(dim, 0.0);
     for (var i = 0; i < text.length; i++) {
       final c = text.codeUnitAt(i);

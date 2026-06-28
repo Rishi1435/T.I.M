@@ -50,3 +50,11 @@ app.*.map.json
 
 # Prebuilt llama.cpp DLLs (large binaries, download via build.dart)
 windows/llama_dlls/
+
+# Local llama.cpp build/source artifacts
+build_temp/
+llama_b8713.zip
+llama_b8713_unzip/
+windows/llama_src/
+devtools_options.yaml
+

@@ -13,6 +13,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../providers/auth_provider.dart';
 import '../providers/model_provider.dart';
 import '../providers/onboarding_provider.dart';
 import '../widgets/drag_drop_zone.dart';
@@ -415,8 +416,11 @@ class _ModelDownloadCard extends StatelessWidget {
           value: isLoading ? null : progress,
           minHeight: 6,
           backgroundColor: const Color(0xFF3C3C5E),
-          valueColor:
-              AlwaysStoppedAnimation<Color>(isPaused ? const Color(0xFFE57373) : const Color(0xFF8AB4F8)),
+          valueColor: AlwaysStoppedAnimation<Color>(
+            isPaused
+                ? const Color(0xFFE57373)
+                : (isLoading ? const Color(0xFFFFB74D) : const Color(0xFF8AB4F8)),
+          ),
         ),
       ),
     ];
@@ -508,11 +512,12 @@ class _BlankSlate extends StatelessWidget {
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 640),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
               const Icon(Icons.auto_awesome, size: 48,
                   color: Color(0xFF8AB4F8),),
               const SizedBox(height: 16),
@@ -559,6 +564,7 @@ class _BlankSlate extends StatelessWidget {
           ),
         ),
       ),
+    ),
     );
   }
 }
@@ -584,6 +590,9 @@ class _ReviewDashboard extends StatelessWidget {
                 ),
               ),
               ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  minimumSize: const Size(0, 48),
+                ),
                 icon: const Icon(Icons.check, size: 18),
                 label: const Text('Confirm all & save'),
                 onPressed: () => ctrl.confirmAll(),
@@ -611,12 +620,12 @@ class _ReviewDashboard extends StatelessWidget {
   }
 }
 
-class _ConfirmedGate extends StatelessWidget {
+class _ConfirmedGate extends ConsumerWidget {
   const _ConfirmedGate({required this.ctrl});
   final GenesisController ctrl;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -633,8 +642,19 @@ class _ConfirmedGate extends StatelessWidget {
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.grey),
           ),
+          const SizedBox(height: 24),
+          ElevatedButton(
+            onPressed: () {
+              ref.read(onboardingCompletedProvider.notifier).setCompleted(true);
+              if (Navigator.of(context).canPop()) {
+                Navigator.of(context).pop();
+              }
+            },
+            child: const Text('Enter Chat Workspace'),
+          ),
         ],
       ),
     );
   }
 }
+

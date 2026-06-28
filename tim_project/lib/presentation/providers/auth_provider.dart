@@ -9,7 +9,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide AuthState;
 
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../../data/services/supabase_service.dart';
+import 'vault_provider.dart';
 
 @immutable
 sealed class AuthState {
@@ -39,10 +42,11 @@ class AuthError extends AuthState {
 }
 
 class AuthNotifier extends StateNotifier<AuthState> {
-  AuthNotifier() : super(const AuthInitial()) {
+  AuthNotifier(this.ref) : super(const AuthInitial()) {
     _init();
   }
 
+  final Ref ref;
   late final StreamSubscription<dynamic> _sub;
 
   Future<void> _init() async {
@@ -65,6 +69,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
     try {
       await SupabaseService.client.auth
           .signInWithPassword(email: email, password: password);
+      // Automatically unlock the local vault with the login password
+      await ref.read(vaultProvider.notifier).unlock(password);
     } on AuthException catch (e) {
       state = AuthError(e.message);
     } catch (e) {
@@ -77,7 +83,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
     try {
       await SupabaseService.client.auth
           .signUp(email: email, password: password);
-      // Onboarding flag stays false until Genesis completes.
+      // Automatically unlock the local vault with the signup password
+      await ref.read(vaultProvider.notifier).unlock(password);
     } on AuthException catch (e) {
       state = AuthError(e.message);
     } catch (e) {
@@ -86,6 +93,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> signOut() async {
+    ref.read(vaultProvider.notifier).lock();
     await SupabaseService.client.auth.signOut();
   }
 
@@ -97,12 +105,41 @@ class AuthNotifier extends StateNotifier<AuthState> {
 }
 
 final authProvider =
-    StateNotifierProvider<AuthNotifier, AuthState>((ref) => AuthNotifier());
+    StateNotifierProvider<AuthNotifier, AuthState>((ref) => AuthNotifier(ref));
 
-/// Has the current user completed Genesis onboarding?
-/// Backed by SharedPreferences so it survives app restarts.
-final onboardingCompletedProvider = StateProvider<bool>((ref) {
-  // The real implementation reads from SharedPreferences in main.dart
-  // and seeds this provider. Default false for first-time users.
-  return false;
+class OnboardingCompletedNotifier extends StateNotifier<bool> {
+  OnboardingCompletedNotifier() : super(false) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userId = SupabaseService.currentUserId;
+      if (userId.isNotEmpty) {
+        state = prefs.getBool('onboarding_completed_$userId') ?? false;
+      }
+    } catch (_) {}
+  }
+
+  Future<void> setCompleted(bool completed) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userId = SupabaseService.currentUserId;
+      if (userId.isNotEmpty) {
+        await prefs.setBool('onboarding_completed_$userId', completed);
+      }
+    } catch (_) {}
+    state = completed;
+  }
+}
+
+final onboardingCompletedProvider =
+    StateNotifierProvider<OnboardingCompletedNotifier, bool>((ref) {
+  final authState = ref.watch(authProvider);
+  final notifier = OnboardingCompletedNotifier();
+  if (authState is Authenticated) {
+    notifier._load();
+  }
+  return notifier;
 });
