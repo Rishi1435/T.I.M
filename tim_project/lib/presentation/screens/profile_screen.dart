@@ -151,44 +151,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 16),
-                      Divider(color: Colors.white.withValues(alpha: 0.1)),
-                      const SizedBox(height: 8),
-                      InkWell(
-                        onTap: () {
-                          // Toggle tenant user mock or switch profile
-                        },
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 32,
-                              height: 32,
-                              decoration: BoxDecoration(
-                                border: Border.all(
-                                  color: Colors.white.withValues(alpha: 0.2),
-                                ),
-                                shape: BoxShape.circle,
-                              ),
-                              alignment: Alignment.center,
-                              child: Text(
-                                'B',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: palette.textSecondary,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Text(
-                              "Switch to Bujju's Vault",
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: palette.textSecondary,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
                     ],
                   ),
                 ),

@@ -41,7 +41,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _dragging = false;
 
   @override
+  void initState() {
+    super.initState();
+    _inputCtrl.addListener(_onInputChanged);
+  }
+
+  void _onInputChanged() {
+    setState(() {});
+  }
+
+  @override
   void dispose() {
+    _inputCtrl.removeListener(_onInputChanged);
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
