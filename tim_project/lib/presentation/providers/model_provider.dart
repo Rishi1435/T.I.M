@@ -99,6 +99,9 @@ class ModelController extends StateNotifier<ModelState> {
     final onDisk = await _downloader.isDownloaded(model.id);
     if (mounted) {
       state = state.copyWith(isOnDisk: onDisk);
+      if (onDisk) {
+        downloadAndLoad();
+      }
     }
   }
 

@@ -90,6 +90,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     // Auto-scroll when tokens arrive
     if (chat.isGenerating) _scrollToBottom();
 
+    // Auto-scroll when messages list changes length
+    ref.listen<int>(chatProvider.select((s) => s.messages.length), (prev, next) {
+      _scrollToBottom();
+    });
+
     // Determine main view-pane
     Widget mainPane;
     if (_activeView == 'profile') {
@@ -259,6 +264,37 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         const SizedBox(height: 24),
         // Floating Mode Switcher
         _buildModeSwitcher(palette),
+
+        if ((model.phase == ModelPhase.loading || model.phase == ModelPhase.downloading) && _activeMode == 'chat')
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: palette.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+              ),
+              child: Row(
+                children: [
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      model.phase == ModelPhase.loading
+                          ? 'Loading T.I.M. model into memory…'
+                          : 'Downloading model (${(model.downloadProgress * 100).toStringAsFixed(0)}%)…',
+                      style: TextStyle(color: palette.textSecondary, fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
 
         if (chat.isGenerating && _activeMode == 'chat')
           const Padding(
@@ -662,14 +698,32 @@ class _ModelBadge extends ConsumerWidget {
     final palette = theme.extension<TimPalette>()!;
     final label = state.selected?.label ?? 'Change model';
 
+    final isReady = state.phase == ModelPhase.ready;
+    final isLoading = state.phase == ModelPhase.loading || state.phase == ModelPhase.downloading;
+
     return ActionChip(
-      avatar: Icon(Icons.memory, size: 14, color: palette.primary),
+      avatar: isLoading
+          ? const SizedBox(
+              width: 10,
+              height: 10,
+              child: CircularProgressIndicator(strokeWidth: 1.5),
+            )
+          : Icon(
+              isReady ? Icons.memory : Icons.warning_amber_rounded,
+              size: 14,
+              color: isReady ? palette.primary : Colors.orangeAccent,
+            ),
       label: Text(
-        label,
-        style: TextStyle(color: palette.textSecondary, fontSize: 11),
+        isReady ? label : '$label (Not loaded)',
+        style: TextStyle(
+          color: isReady ? palette.textSecondary : Colors.orangeAccent,
+          fontSize: 11,
+        ),
       ),
       backgroundColor: Colors.white.withValues(alpha: 0.05),
-      side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+      side: BorderSide(
+        color: isReady ? Colors.white.withValues(alpha: 0.1) : Colors.orangeAccent.withValues(alpha: 0.3),
+      ),
       onPressed: () {
         showDialog<void>(
           context: context,
