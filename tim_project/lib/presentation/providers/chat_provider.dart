@@ -65,6 +65,7 @@ class ChatState {
     this.pendingChips = const [],
     this.isGenerating = false,
     this.streamingMessageId,
+    this.activeWorkspace = 'General',
   });
 
   final List<ChatMessage> messages;
@@ -75,6 +76,7 @@ class ChatState {
   final bool isGenerating;
   /// The id of the message currently being streamed (if any).
   final String? streamingMessageId;
+  final String activeWorkspace;
 
   ChatState copyWith({
     List<ChatMessage>? messages,
@@ -83,6 +85,7 @@ class ChatState {
     List<FileChip>? pendingChips,
     bool? isGenerating,
     Object? streamingMessageId = _sentinel,
+    String? activeWorkspace,
   }) =>
       ChatState(
         messages: messages ?? this.messages,
@@ -93,6 +96,7 @@ class ChatState {
         streamingMessageId: identical(streamingMessageId, _sentinel)
             ? this.streamingMessageId
             : streamingMessageId as String?,
+        activeWorkspace: activeWorkspace ?? this.activeWorkspace,
       );
 }
 
@@ -145,7 +149,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     if (vault != null) {
       try {
         final queryEmb = LlmEngine.hashEmbed(text);
-        final memories = await vault.semanticSearch(queryEmb, k: 3);
+        final memories = await vault.semanticSearch(queryEmb, workspace: state.activeWorkspace, k: 3);
         if (memories.isNotEmpty) {
           ragContext = memories.map((m) => '- ${m.content}').join('\n');
         }
@@ -175,8 +179,18 @@ class ChatNotifier extends StateNotifier<ChatState> {
       if (vault != null) {
         try {
           final userMsgId = DateTime.now().microsecondsSinceEpoch.toString();
-          vault.insertChatMessage(id: userMsgId, sender: 'user', text: text);
-          vault.insertChatMessage(id: aiMsgId, sender: 'ai', text: response);
+          vault.insertChatMessage(
+            id: userMsgId,
+            sender: 'user',
+            text: text,
+            workspace: state.activeWorkspace,
+          );
+          vault.insertChatMessage(
+            id: aiMsgId,
+            sender: 'ai',
+            text: response,
+            workspace: state.activeWorkspace,
+          );
           
           // Trigger background memory insertion / reflexion indexing
           _insertMemoriesBackground(text, response, vault);
@@ -240,8 +254,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
       return;
     }
     try {
-      final rows = vault.loadChatHistory(limit: 100);
-      if (rows.isEmpty) return;
+      final rows = vault.loadChatHistory(workspace: state.activeWorkspace, limit: 100);
+      if (rows.isEmpty) {
+        state = state.copyWith(messages: const []);
+        return;
+      }
       final msgs = rows.map((r) {
         final sender = switch (r['sender']) {
           'user' => MessageSender.user,
@@ -258,6 +275,31 @@ class ChatNotifier extends StateNotifier<ChatState> {
       state = state.copyWith(messages: msgs);
     } catch (e) {
       _log.warn('Failed to load chat history: $e');
+    }
+  }
+
+  void changeWorkspace(String workspaceName) {
+    state = state.copyWith(
+      activeWorkspace: workspaceName,
+      messages: const [],
+    );
+    _loadHistory();
+  }
+
+  List<String> getWorkspaces() {
+    final vault = _vaultCtrl.vault;
+    if (vault == null) return const [];
+    try {
+      final list = vault.getWorkspaces();
+      final defaults = ['Q-L-U-E Sprint Planning', 'Behavioral Mock Interview', 'AWS API Gateway Config', 'General'];
+      for (final def in defaults) {
+        if (!list.contains(def)) {
+          list.add(def);
+        }
+      }
+      return list;
+    } catch (_) {
+      return ['Q-L-U-E Sprint Planning', 'Behavioral Mock Interview', 'AWS API Gateway Config', 'General'];
     }
   }
 
@@ -428,6 +470,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
             id: msgId,
             sender: sender == MessageSender.user ? 'user' : 'ai',
             text: text,
+            workspace: state.activeWorkspace,
           );
         } catch (e) {
           _log.warn('Chat message persist failed: $e');
@@ -502,7 +545,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     if (vault != null) {
       try {
         final queryEmb = LlmEngine.hashEmbed(text);
-        final memories = await vault.semanticSearch(queryEmb, k: 3);
+        final memories = await vault.semanticSearch(queryEmb, workspace: state.activeWorkspace, k: 3);
         if (memories.isNotEmpty) {
           ragContext = memories.map((m) => '- ${m.content}').join('\n');
         }
@@ -616,6 +659,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
               id: userMsgId,
               sender: 'user',
               text: text,
+              workspace: state.activeWorkspace,
             );
           }
           if (finalReply.isNotEmpty) {
@@ -623,6 +667,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
               id: aiMsgId,
               sender: 'ai',
               text: finalReply,
+              workspace: state.activeWorkspace,
             );
           }
         } catch (dbErr) {
@@ -659,12 +704,14 @@ class ChatNotifier extends StateNotifier<ChatState> {
               id: userMsgId,
               sender: 'user',
               text: text,
+              workspace: state.activeWorkspace,
             );
           }
           vault.insertChatMessage(
             id: aiMsgId,
             sender: 'ai',
             text: errText,
+            workspace: state.activeWorkspace,
           );
         } catch (dbErr) {
           _log.error('CRITICAL: Failed to save to local memory on generation error: $dbErr');
@@ -717,6 +764,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     dynamic vault,
   ) async {
     try {
+      final currentWorkspace = state.activeWorkspace;
       // Chunk user text
       final userChunks = _chunkText(userText);
       for (final chunk in userChunks) {
@@ -724,7 +772,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         await vault.insertMemory(
           content: 'User said: $chunk',
           embedding: userEmb,
-          metadata: {'sender': 'user'},
+          metadata: {'sender': 'user', 'workspace': currentWorkspace},
         );
       }
 
@@ -735,7 +783,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         await vault.insertMemory(
           content: 'T.I.M. said: $chunk',
           embedding: aiEmb,
-          metadata: {'sender': 'ai'},
+          metadata: {'sender': 'ai', 'workspace': currentWorkspace},
         );
       }
     } catch (e) {

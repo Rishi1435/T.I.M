@@ -118,9 +118,13 @@ class LocalVault {
         id          TEXT PRIMARY KEY,
         sender      TEXT NOT NULL,
         text        TEXT NOT NULL,
+        workspace   TEXT NOT NULL DEFAULT 'General',
         created_at  TEXT NOT NULL DEFAULT (datetime('now'))
       );
     ''');
+    try {
+      db.execute("ALTER TABLE chat_messages ADD COLUMN workspace TEXT NOT NULL DEFAULT 'General';");
+    } catch (_) {}
 
     // sqlite-vec virtual table for memories.
     // vec0 stores a rowid + a fixed-dim float vector.
@@ -199,6 +203,7 @@ class LocalVault {
   /// KNN semantic search via sqlite-vec.
   Future<List<Memory>> semanticSearch(
     List<double> queryEmbedding, {
+    String? workspace,
     int k = 8,
   }) async {
     if (!_vecAvailable) {
@@ -206,6 +211,19 @@ class LocalVault {
     }
     final emb = _encodeEmbedding(queryEmbedding);
     try {
+      if (workspace != null && workspace.isNotEmpty) {
+        final rows = _db!.prepare('''
+          SELECT m.id, m.content, m.metadata_json, m.created_at
+          FROM memories_vec v
+          JOIN memories m ON m.rowid = v.rowid
+          WHERE v.embedding MATCH ? AND json_extract(m.metadata_json, '\$.workspace') = ?
+          ORDER BY v.distance
+          LIMIT ?
+        ''').select([emb, workspace, k]);
+        if (rows.isNotEmpty) {
+          return rows.map(_rowToMemory).toList();
+        }
+      }
       final rows = _db!.prepare('''
         SELECT m.id, m.content, m.metadata_json, m.created_at
         FROM memories_vec v
@@ -273,13 +291,14 @@ class LocalVault {
     required String id,
     required String sender, // 'user' | 'ai' | 'system'
     required String text,
+    required String workspace,
   }) {
-    print('DEBUG [LocalVault]: Attempting to insert chat message: id=$id, sender=$sender');
+    print('DEBUG [LocalVault]: Attempting to insert chat message: id=$id, sender=$sender, workspace=$workspace');
     try {
       _db!.prepare('''
-        INSERT OR IGNORE INTO chat_messages (id, sender, text)
-        VALUES (?, ?, ?)
-      ''').execute([id, sender, text]);
+        INSERT OR IGNORE INTO chat_messages (id, sender, text, workspace)
+        VALUES (?, ?, ?, ?)
+      ''').execute([id, sender, text, workspace]);
       print('DEBUG [LocalVault]: Successfully inserted/ignored chat message: id=$id');
     } catch (e) {
       print('CRITICAL [LocalVault]: Failed to insert chat message - $e');
@@ -288,11 +307,12 @@ class LocalVault {
   }
 
   /// Load the most recent [limit] chat messages ordered oldest-first.
-  List<Map<String, String>> loadChatHistory({int limit = 100}) {
-    final rows = _db!.prepare(
-      'SELECT id, sender, text, created_at FROM chat_messages '
-      'ORDER BY created_at DESC LIMIT ?',
-    ).select([limit]);
+  List<Map<String, String>> loadChatHistory({required String workspace, int limit = 100}) {
+    final rows = _db!.prepare('''
+      SELECT id, sender, text, created_at FROM chat_messages 
+      WHERE workspace = ?
+      ORDER BY created_at DESC LIMIT ?
+    ''').select([workspace, limit]);
     // Reverse so oldest is first
     return rows.reversed
         .map((r) => {
@@ -301,6 +321,28 @@ class LocalVault {
               'text': r['text'] as String,
             },)
         .toList();
+  }
+
+  /// Load list of all unique workspaces in database.
+  List<String> getWorkspaces() {
+    if (_db == null) return const [];
+    try {
+      final stmt = _db!.prepare('''
+        SELECT DISTINCT workspace FROM chat_messages 
+        ORDER BY created_at DESC
+      ''');
+      final cursor = stmt.select();
+      final List<String> list = [];
+      for (final row in cursor) {
+        final name = row['workspace'] as String?;
+        if (name != null && name.isNotEmpty) {
+          list.add(name);
+        }
+      }
+      return list;
+    } catch (_) {
+      return const [];
+    }
   }
 
   // ============================================================

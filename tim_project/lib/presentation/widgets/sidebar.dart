@@ -16,6 +16,9 @@ class Sidebar extends StatelessWidget {
     required this.onViewChanged,
     required this.onNewSession,
     required this.onWorkspaceSelected,
+    required this.workspaces,
+    required this.activeWorkspace,
+    required this.hardwareInfo,
   });
 
   final bool expanded;
@@ -24,6 +27,9 @@ class Sidebar extends StatelessWidget {
   final ValueChanged<String> onViewChanged;
   final VoidCallback onNewSession;
   final ValueChanged<String> onWorkspaceSelected;
+  final List<String> workspaces;
+  final String activeWorkspace;
+  final String hardwareInfo;
 
   @override
   Widget build(BuildContext context) {
@@ -46,7 +52,7 @@ class Sidebar extends StatelessWidget {
         _buildNavItem(
           icon: Icons.add,
           label: 'New session',
-          isActive: activeView == 'home',
+          isActive: false, // Don't highlight New Session persistently
           onTap: () {
             onViewChanged('home');
             onNewSession();
@@ -74,28 +80,30 @@ class Sidebar extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Expanded(
-            child: ListView(
+            child: ListView.builder(
               padding: EdgeInsets.zero,
-              children: [
-                _buildHistoryItem(
-                  icon: Icons.chat_bubble_outline,
-                  label: 'Q-L-U-E Sprint Planning',
-                  onTap: () => onWorkspaceSelected('Q-L-U-E Sprint Planning'),
+              itemCount: workspaces.length,
+              itemBuilder: (context, index) {
+                final ws = workspaces[index];
+                final isCurrent = ws == activeWorkspace && activeView == 'home';
+                IconData icon;
+                if (ws.toLowerCase().contains('planning')) {
+                  icon = Icons.chat_bubble_outline;
+                } else if (ws.toLowerCase().contains('interview')) {
+                  icon = Icons.graphic_eq;
+                } else if (ws.toLowerCase().contains('config') || ws.toLowerCase().contains('api')) {
+                  icon = Icons.code;
+                } else {
+                  icon = Icons.folder_open_outlined;
+                }
+                return _buildHistoryItem(
+                  icon: icon,
+                  label: ws,
+                  onTap: () => onWorkspaceSelected(ws),
                   palette: palette,
-                ),
-                _buildHistoryItem(
-                  icon: Icons.graphic_eq,
-                  label: 'Behavioral Mock Interview',
-                  onTap: () => onWorkspaceSelected('Behavioral Mock Interview'),
-                  palette: palette,
-                ),
-                _buildHistoryItem(
-                  icon: Icons.code,
-                  label: 'AWS API Gateway Config',
-                  onTap: () => onWorkspaceSelected('AWS API Gateway Config'),
-                  palette: palette,
-                ),
-              ],
+                  isActive: isCurrent,
+                );
+              },
             ),
           ),
         ] else
@@ -116,6 +124,36 @@ class Sidebar extends StatelessWidget {
           onTap: () => onViewChanged('settings'),
           palette: palette,
         ),
+        if (expanded && hardwareInfo.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          const Divider(color: Colors.white10),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'SYSTEM HARDWARE',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    color: palette.muted,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  hardwareInfo,
+                  style: TextStyle(
+                    fontSize: 11,
+                    height: 1.4,
+                    color: palette.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 8),
       ],
     );
@@ -202,17 +240,19 @@ class Sidebar extends StatelessWidget {
     required String label,
     required VoidCallback onTap,
     required TimPalette palette,
+    required bool isActive,
   }) {
     return InkWell(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+        color: isActive ? palette.primary.withValues(alpha: 0.1) : Colors.transparent,
         child: Row(
           children: [
             Icon(
               icon,
               size: 18,
-              color: palette.muted,
+              color: isActive ? palette.primary : palette.muted,
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -220,7 +260,8 @@ class Sidebar extends StatelessWidget {
                 label,
                 style: TextStyle(
                   fontSize: 14,
-                  color: palette.textSecondary,
+                  fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+                  color: isActive ? palette.primary : palette.textSecondary,
                 ),
                 overflow: TextOverflow.ellipsis,
               ),

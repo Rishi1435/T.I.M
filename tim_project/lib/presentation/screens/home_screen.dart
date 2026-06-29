@@ -87,6 +87,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final theme = Theme.of(context);
     final palette = theme.extension<TimPalette>()!;
 
+    final hardwareInfo = hw.maybeWhen(
+      data: (p) => 'RAM: ${p.totalRamGb.toStringAsFixed(0)} GB\n'
+                   'VRAM: ${p.dedicatedVramGb.toStringAsFixed(0)} GB\n'
+                   'GPU: ${p.gpuName.length > 20 ? "${p.gpuName.substring(0, 20)}..." : p.gpuName}\n'
+                   'Power: ${p.batteryStatusString}',
+      orElse: () => 'Loading stats...',
+    );
+
     // Auto-scroll when tokens arrive
     if (chat.isGenerating) _scrollToBottom();
 
@@ -152,18 +160,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         if (view == 'home') _activeMode = 'chat';
                       }),
                       onNewSession: () {
-                        // Clear active session
-                        ref.read(chatProvider.notifier).clearHistory();
+                        _showNewSessionDialog(context);
                       },
                       onWorkspaceSelected: (workspace) {
                         setState(() {
                           _activeView = 'home';
                           _activeMode = 'chat';
                         });
-                        // Simulate loading historic conversation workspace
-                        ref.read(chatProvider.notifier).clearHistory();
-                        ref.read(chatProvider.notifier).addSystem('Loaded Workspace: $workspace');
+                        ref.read(chatProvider.notifier).changeWorkspace(workspace);
                       },
+                      workspaces: ref.watch(chatProvider.notifier).getWorkspaces(),
+                      activeWorkspace: chat.activeWorkspace,
+                      hardwareInfo: hardwareInfo,
                     ),
                   ),
 
@@ -180,34 +188,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              // Hardware stats
-                              hw.when(
-                                data: (p) => Tooltip(
-                                  message: p.toString(),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withValues(alpha: 0.05),
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-                                    ),
-                                    child: Text(
-                                      '${p.totalRamGb.toStringAsFixed(0)}GB RAM • '
-                                      '${p.dedicatedVramGb.toStringAsFixed(0)}GB VRAM • '
-                                      '${p.batteryStatusString}',
-                                      style: TextStyle(color: palette.textSecondary, fontSize: 11),
-                                    ),
-                                  ),
-                                ),
-                                loading: () => const SizedBox(
-                                  width: 12,
-                                  height: 12,
-                                  child: CircularProgressIndicator(strokeWidth: 1.5),
-                                ),
-                                error: (_, __) => const SizedBox.shrink(),
-                              ),
-                              const SizedBox(width: 8),
-
                               // Model selection
                               _ModelBadge(state: model),
                               const SizedBox(width: 8),
@@ -681,6 +661,61 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ref.read(voiceCallProvider.notifier).startCall();
               }
             },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showNewSessionDialog(BuildContext context) {
+    final theme = Theme.of(context);
+    final palette = theme.extension<TimPalette>()!;
+    final controller = TextEditingController();
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: palette.surface,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+        ),
+        title: const Text('Create New Session', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: controller,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'Enter session name (e.g. Code Review)',
+            hintStyle: TextStyle(color: palette.muted),
+            enabledBorder: UnderlineInputBorder(
+              borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.2)),
+            ),
+            focusedBorder: UnderlineInputBorder(
+              borderSide: BorderSide(color: palette.primary),
+            ),
+          ),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('Cancel', style: TextStyle(color: palette.textSecondary)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: palette.primary,
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () {
+              final name = controller.text.trim();
+              if (name.isNotEmpty) {
+                ref.read(chatProvider.notifier).changeWorkspace(name);
+              }
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('Create', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ],
       ),
