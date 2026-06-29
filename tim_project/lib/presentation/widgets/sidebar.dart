@@ -164,7 +164,7 @@ class Sidebar extends StatelessWidget {
           duration: const Duration(milliseconds: 150),
           height: 40,
           margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 14),
+          padding: EdgeInsets.symmetric(horizontal: expanded ? 14 : 11),
           decoration: BoxDecoration(
             color: isActive ? palette.surfaceVariant : Colors.transparent,
             borderRadius: BorderRadius.circular(20),

@@ -1,24 +1,17 @@
 // ============================================================
 // lib/presentation/screens/genesis_screen.dart
-// Phase 3 — Genesis Onboarding.
-//
-// Flow:
-//   blank    -> "I don't know your story yet. Drop your resume, or
-//               tell me about your journey."
-//   drafting -> resume dropped; LLM extracting Memory Blocks
-//   review   -> user edits / deletes / adds blocks (Memory Block cards)
-//   confirmed-> vectorise + persist into the local vault
+// Redesigned premium Genesis onboarding screen.
 // ============================================================
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/theme/app_theme.dart';
 import '../providers/auth_provider.dart';
 import '../providers/model_provider.dart';
 import '../providers/onboarding_provider.dart';
 import '../widgets/drag_drop_zone.dart';
 import '../widgets/memory_block.dart';
-
 
 class GenesisScreen extends ConsumerWidget {
   const GenesisScreen({super.key});
@@ -28,57 +21,75 @@ class GenesisScreen extends ConsumerWidget {
     final state = ref.watch(genesisProvider);
     final ctrl = ref.read(genesisProvider.notifier);
     final modelState = ref.watch(modelProvider);
+    final theme = Theme.of(context);
+    final palette = theme.extension<TimPalette>()!;
 
     final modelReady = modelState.phase == ModelPhase.ready;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Genesis — getting to know you')),
-      body: Column(
-        children: [
-          // ---- Model download card (always visible when not ready) ----
-          if (!modelReady)
-            _ModelDownloadCard(
-              modelState: modelState,
-              onDownload: () {
-                // Always read fresh — never capture notifier at build time
-                // or it becomes stale after hardware re-init disposes it.
-                ref.read(modelProvider.notifier).downloadAndLoad();
-              },
-              onPause: () {
-                ref.read(modelProvider.notifier).pauseDownload();
+      appBar: AppBar(
+        title: const Text('Genesis — Getting to Know You'),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+      ),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: const Alignment(0.0, -0.4),
+            radius: 1.2,
+            colors: [
+              palette.bgGlow,
+              palette.bg,
+            ],
+            stops: const [0.0, 0.8],
+          ),
+        ),
+        child: Column(
+          children: [
+            // ---- Model download card (always visible when not ready) ----
+            if (!modelReady)
+              _ModelDownloadCard(
+                modelState: modelState,
+                onDownload: () {
+                  ref.read(modelProvider.notifier).downloadAndLoad();
+                },
+                onPause: () {
+                  ref.read(modelProvider.notifier).pauseDownload();
+                },
+              ),
+            // ---- Genesis error banner ----
+            if (state.error != null)
+              _ErrorBanner(message: state.error!),
+            // ---- Main phase content ----
+            Expanded(
+              child: switch (state.phase) {
+                GenesisPhase.blank => _BlankSlate(
+                    modelReady: modelReady,
+                    onResume: (text) => ctrl.extractFromResume(text),
+                    onTellJourney: (text) => ctrl.extractFromResume(text),
+                  ),
+                GenesisPhase.drafting => Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const CircularProgressIndicator(),
+                        const SizedBox(height: 20),
+                        Text(
+                          state.extracting
+                              ? 'Reading your story…'
+                              : 'Drafting Memory Blocks…',
+                          style: TextStyle(color: palette.textSecondary, fontSize: 15),
+                        ),
+                      ],
+                    ),
+                  ),
+                GenesisPhase.review =>
+                  _ReviewDashboard(state: state, ctrl: ctrl),
+                GenesisPhase.confirmed => _ConfirmedGate(ctrl: ctrl),
               },
             ),
-          // ---- Genesis error banner (e.g. tried to extract without model) ----
-          if (state.error != null)
-            _ErrorBanner(message: state.error!),
-          // ---- Main phase content ----
-          Expanded(
-            child: switch (state.phase) {
-              GenesisPhase.blank => _BlankSlate(
-                  modelReady: modelReady,
-                  onResume: (text) => ctrl.extractFromResume(text),
-                  onTellJourney: (text) => ctrl.extractFromResume(text),
-                ),
-              GenesisPhase.drafting => Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const CircularProgressIndicator(),
-                      const SizedBox(height: 16),
-                      Text(
-                        state.extracting
-                            ? 'Reading your story…'
-                            : 'Drafting Memory Blocks…',
-                      ),
-                    ],
-                  ),
-                ),
-              GenesisPhase.review =>
-                _ReviewDashboard(state: state, ctrl: ctrl),
-              GenesisPhase.confirmed => _ConfirmedGate(ctrl: ctrl),
-            },
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -99,6 +110,8 @@ class _ModelDownloadCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final palette = theme.extension<TimPalette>()!;
     final phase = modelState.phase;
     final model = modelState.selected ?? modelState.recommended;
     final progress = modelState.downloadProgress;
@@ -112,16 +125,16 @@ class _ModelDownloadCard extends StatelessWidget {
       duration: const Duration(milliseconds: 300),
       width: double.infinity,
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
+        color: palette.surface,
         border: Border(
           bottom: BorderSide(
             color: isWorking
-                ? const Color(0xFF8AB4F8)
+                ? palette.primary
                 : hasError
-                    ? const Color(0xFFCF6679)
+                    ? palette.danger
                     : isPaused
-                        ? const Color(0xFFE57373)
-                        : const Color(0xFF3C3C5E),
+                        ? Colors.orangeAccent
+                        : palette.surfaceVariant,
             width: 1.5,
           ),
         ),
@@ -130,19 +143,18 @@ class _ModelDownloadCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ---- Row 1: icon + title + badge ----
           Row(
             children: [
               Container(
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF252540),
+                  color: palette.surfaceVariant,
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.memory_rounded,
-                  color: Color(0xFF8AB4F8),
+                  color: palette.primary,
                   size: 20,
                 ),
               ),
@@ -154,7 +166,7 @@ class _ModelDownloadCard extends StatelessWidget {
                     Text(
                       model != null ? model.label : 'AI Model Required',
                       style: const TextStyle(
-                        color: Color(0xFFE8EAED),
+                        color: Colors.white,
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
                       ),
@@ -163,8 +175,8 @@ class _ModelDownloadCard extends StatelessWidget {
                       Text(
                         '${model.sizeGb.toStringAsFixed(1)} GB  •  '
                         'Requires ${model.minRamGb.toStringAsFixed(0)} GB RAM',
-                        style: const TextStyle(
-                          color: Color(0xFF9AA0A6),
+                        style: TextStyle(
+                          color: palette.muted,
                           fontSize: 11,
                         ),
                       ),
@@ -172,21 +184,16 @@ class _ModelDownloadCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              // Phase badge
               _PhaseBadge(phase: phase),
             ],
           ),
-
-          // ---- Row 2: progress bar (only when downloading, paused, or loading) ----
-          if (isWorking || isPaused) ..._buildProgressSection(isDownloading, isPaused, isLoading, progress),
-
-          // ---- Row 3: action button or error ----
+          if (isWorking || isPaused) ..._buildProgressSection(isDownloading, isPaused, isLoading, progress, palette),
           const SizedBox(height: 12),
           if (hasError)
             Text(
               modelState.error ?? 'An error occurred.',
-              style: const TextStyle(
-                color: Color(0xFFCF6679),
+              style: TextStyle(
+                color: palette.danger,
                 fontSize: 12,
               ),
             )
@@ -197,11 +204,11 @@ class _ModelDownloadCard extends StatelessWidget {
                 icon: const Icon(Icons.pause_rounded, size: 18),
                 label: const Text('Pause Download'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFCF6679),
-                  foregroundColor: Colors.white,
+                  backgroundColor: palette.danger,
+                  foregroundColor: Colors.black,
                   padding: const EdgeInsets.symmetric(vertical: 10),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                 ),
                 onPressed: onPause,
@@ -218,18 +225,17 @@ class _ModelDownloadCard extends StatelessWidget {
                       : 'Resume Download',
                 ),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF3367D6),
-                  foregroundColor: Colors.white,
+                  backgroundColor: palette.primary,
+                  foregroundColor: Colors.black,
                   padding: const EdgeInsets.symmetric(vertical: 10),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                 ),
                 onPressed: onDownload,
               ),
             )
           else if (!isWorking) ...[
-              // On-disk detection sub-label
               if (model != null) ...[
                 Row(
                   children: [
@@ -239,8 +245,8 @@ class _ModelDownloadCard extends StatelessWidget {
                           : Icons.cloud_download_outlined,
                       size: 13,
                       color: modelState.isOnDisk
-                          ? const Color(0xFF81C995)
-                          : const Color(0xFF9AA0A6),
+                          ? palette.success
+                          : palette.muted,
                     ),
                     const SizedBox(width: 5),
                     Expanded(
@@ -250,8 +256,8 @@ class _ModelDownloadCard extends StatelessWidget {
                             : 'Not downloaded yet — ${model.sizeGb.toStringAsFixed(1)} GB required',
                         style: TextStyle(
                           color: modelState.isOnDisk
-                              ? const Color(0xFF81C995)
-                              : const Color(0xFF9AA0A6),
+                              ? palette.success
+                              : palette.muted,
                           fontSize: 11,
                         ),
                       ),
@@ -278,19 +284,18 @@ class _ModelDownloadCard extends StatelessWidget {
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: modelState.isOnDisk
-                        ? const Color(0xFF1E5631)
-                        : const Color(0xFF3367D6),
-                    foregroundColor: Colors.white,
+                        ? palette.success
+                        : palette.primary,
+                    foregroundColor: Colors.black,
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(12),
                     ),
                   ),
                   onPressed: onDownload,
                 ),
               ),
             ],
-
         ],
       ),
     );
@@ -301,6 +306,7 @@ class _ModelDownloadCard extends StatelessWidget {
     bool isPaused,
     bool isLoading,
     double progress,
+    TimPalette palette,
   ) {
     final percent = (progress * 100).clamp(0.0, 100.0);
     final speed = modelState.downloadSpeedBps;
@@ -308,7 +314,6 @@ class _ModelDownloadCard extends StatelessWidget {
     final received = modelState.downloadBytesReceived;
     final total = modelState.downloadTotalBytes;
 
-    // Format helpers
     String fmtBytes(int b) {
       if (b <= 0) return '0 MB';
       final mb = b / (1024 * 1024);
@@ -336,13 +341,12 @@ class _ModelDownloadCard extends StatelessWidget {
         const Text(
           'Loading model into memory…',
           style: TextStyle(
-            color: Color(0xFFFFB74D),
+            color: Colors.orangeAccent,
             fontSize: 12,
             fontWeight: FontWeight.w500,
           ),
         )
       else ...[
-        // Top row: label + percentage
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -351,7 +355,7 @@ class _ModelDownloadCard extends StatelessWidget {
                   ? 'Download paused'
                   : 'Downloading with 8 connections…',
               style: TextStyle(
-                color: isPaused ? const Color(0xFFE57373) : const Color(0xFF8AB4F8),
+                color: isPaused ? Colors.orangeAccent : palette.primary,
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
               ),
@@ -359,7 +363,7 @@ class _ModelDownloadCard extends StatelessWidget {
             Text(
               '${percent.toStringAsFixed(1)}%',
               style: TextStyle(
-                color: isPaused ? const Color(0xFFE57373) : const Color(0xFF8AB4F8),
+                color: isPaused ? Colors.orangeAccent : palette.primary,
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
               ),
@@ -367,31 +371,29 @@ class _ModelDownloadCard extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 4),
-        // Bottom row: received/total · speed · ETA
         Row(
           children: [
             Text(
               total > 0
                   ? '${fmtBytes(received)} / ${fmtBytes(total)}'
                   : fmtBytes(received),
-              style: const TextStyle(
-                color: Color(0xFF9AA0A6),
+              style: TextStyle(
+                color: palette.muted,
                 fontSize: 11,
               ),
             ),
             const Spacer(),
             if (!isPaused) ...[
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF252540),
+                  color: palette.surfaceVariant,
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
                   fmtSpeed(speed),
-                  style: const TextStyle(
-                    color: Color(0xFF8AB4F8),
+                  style: TextStyle(
+                    color: palette.primary,
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
                   ),
@@ -400,8 +402,8 @@ class _ModelDownloadCard extends StatelessWidget {
               const SizedBox(width: 8),
               Text(
                 'ETA ${fmtEta(eta)}',
-                style: const TextStyle(
-                  color: Color(0xFF9AA0A6),
+                style: TextStyle(
+                  color: palette.muted,
                   fontSize: 11,
                 ),
               ),
@@ -415,11 +417,11 @@ class _ModelDownloadCard extends StatelessWidget {
         child: LinearProgressIndicator(
           value: isLoading ? null : progress,
           minHeight: 6,
-          backgroundColor: const Color(0xFF3C3C5E),
+          backgroundColor: palette.surfaceVariant,
           valueColor: AlwaysStoppedAnimation<Color>(
             isPaused
-                ? const Color(0xFFE57373)
-                : (isLoading ? const Color(0xFFFFB74D) : const Color(0xFF8AB4F8)),
+                ? Colors.orangeAccent
+                : (isLoading ? Colors.orangeAccent : palette.primary),
           ),
         ),
       ),
@@ -427,21 +429,22 @@ class _ModelDownloadCard extends StatelessWidget {
   }
 }
 
-
 class _PhaseBadge extends StatelessWidget {
   const _PhaseBadge({required this.phase});
   final ModelPhase phase;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final palette = theme.extension<TimPalette>()!;
     final (label, color) = switch (phase) {
-      ModelPhase.idle => ('Not Downloaded', const Color(0xFF9AA0A6)),
-      ModelPhase.recommending => ('Selecting…', const Color(0xFFFFB74D)),
-      ModelPhase.downloading => ('Downloading', const Color(0xFF8AB4F8)),
-      ModelPhase.paused => ('Paused', const Color(0xFFE57373)),
-      ModelPhase.loading => ('Loading', const Color(0xFFFFB74D)),
-      ModelPhase.ready => ('Ready', const Color(0xFF81C995)),
-      ModelPhase.error => ('Error', const Color(0xFFCF6679)),
+      ModelPhase.idle => ('Not Downloaded', palette.muted),
+      ModelPhase.recommending => ('Selecting…', Colors.orangeAccent),
+      ModelPhase.downloading => ('Downloading', palette.primary),
+      ModelPhase.paused => ('Paused', Colors.orangeAccent),
+      ModelPhase.loading => ('Loading', Colors.orangeAccent),
+      ModelPhase.ready => ('Ready', palette.success),
+      ModelPhase.error => ('Error', palette.danger),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -462,30 +465,34 @@ class _PhaseBadge extends StatelessWidget {
   }
 }
 
-// ---- Simple error banner ----
 class _ErrorBanner extends StatelessWidget {
   const _ErrorBanner({required this.message});
   final String message;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final palette = theme.extension<TimPalette>()!;
     return Container(
       width: double.infinity,
-      color: const Color(0xFF3B1A1F),
+      decoration: BoxDecoration(
+        color: palette.danger.withValues(alpha: 0.1),
+        border: Border(bottom: BorderSide(color: palette.danger.withValues(alpha: 0.2))),
+      ),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
-          const Icon(
+          Icon(
             Icons.error_outline,
-            color: Color(0xFFCF6679),
+            color: palette.danger,
             size: 16,
           ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               message,
-              style: const TextStyle(
-                color: Color(0xFFE8A0A8),
+              style: TextStyle(
+                color: palette.danger,
                 fontSize: 12,
               ),
             ),
@@ -509,6 +516,9 @@ class _BlankSlate extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final journeyCtrl = TextEditingController();
+    final theme = Theme.of(context);
+    final palette = theme.extension<TimPalette>()!;
+
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 640),
@@ -518,53 +528,64 @@ class _BlankSlate extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-              const Icon(Icons.auto_awesome, size: 48,
-                  color: Color(0xFF8AB4F8),),
-              const SizedBox(height: 16),
-              Text(
-                'I don\'t know your story yet.',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Let\'s change that. Drop your resume, or tell me about '
-                'your journey.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey),
-              ),
-              const SizedBox(height: 24),
-              // Drag-and-drop zone for PDFs / text files.
-              DragDropZone(
-                onText: (text) => onResume(text),
-                onFile: (path) {
-                  // Stub: real impl reads PDF via syncfusion_flutter_pdf.
-                  onResume('Path dropped: $path');
-                },
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: journeyCtrl,
-                maxLines: 5,
-                decoration: const InputDecoration(
-                  hintText: 'Or type a few paragraphs about yourself…',
+                Icon(
+                  Icons.auto_awesome,
+                  size: 48,
+                  color: palette.primary,
                 ),
-              ),
-              const SizedBox(height: 12),
-              ElevatedButton(
-                // Disable the button until model is ready
-                onPressed:
-                    modelReady ? () => onTellJourney(journeyCtrl.text) : null,
-                child: Text(
-                  modelReady
-                      ? 'Tell T.I.M. my story'
-                      : 'Waiting for model…',
+                const SizedBox(height: 16),
+                Text(
+                  'I don\'t know your story yet.',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 8),
+                Text(
+                  'Let\'s change that. Drop your resume, or tell me about your journey.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: palette.textSecondary, fontSize: 14),
+                ),
+                const SizedBox(height: 24),
+                DragDropZone(
+                  onText: (text) => onResume(text),
+                  onFile: (path) {
+                    onResume('Path dropped: $path');
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: journeyCtrl,
+                  maxLines: 5,
+                  decoration: InputDecoration(
+                    hintText: 'Or type a few paragraphs about yourself…',
+                    hintStyle: TextStyle(color: palette.muted),
+                    fillColor: palette.surface,
+                    filled: true,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(
+                    onPressed: modelReady ? () => onTellJourney(journeyCtrl.text) : null,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: palette.primary,
+                      foregroundColor: Colors.black,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: Text(
+                      modelReady ? 'Tell T.I.M. my story' : 'Waiting for model…',
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
-    ),
     );
   }
 }
@@ -576,25 +597,34 @@ class _ReviewDashboard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final palette = theme.extension<TimPalette>()!;
+
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(24),
           child: Row(
             children: [
               Expanded(
                 child: Text(
-                  'Confirm what I learned. Edit, delete, or add context '
-                  'before I save it.',
-                  style: Theme.of(context).textTheme.titleMedium,
+                  'Confirm what I learned. Edit, delete, or add context before I save it.',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
+              const SizedBox(width: 16),
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   minimumSize: const Size(0, 48),
+                  backgroundColor: palette.primary,
+                  foregroundColor: Colors.black,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
                 icon: const Icon(Icons.check, size: 18),
-                label: const Text('Confirm all & save'),
+                label: const Text('Confirm & Save'),
                 onPressed: () => ctrl.confirmAll(),
               ),
             ],
@@ -602,7 +632,7 @@ class _ReviewDashboard extends StatelessWidget {
         ),
         Expanded(
           child: ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 24),
             itemCount: state.blocks.length,
             itemBuilder: (_, i) {
               final b = state.blocks[i];
@@ -626,35 +656,58 @@ class _ConfirmedGate extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final palette = theme.extension<TimPalette>()!;
+
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.lock_open, size: 48,
-              color: Color(0xFF81C995),),
-          const SizedBox(height: 16),
-          Text('Memory baseline saved.',
-              style: Theme.of(context).textTheme.titleLarge,),
-          const SizedBox(height: 8),
-          const Text(
-            'Your vault is now encrypted and ready. T.I.M. will only '
-            'remember what you confirmed.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480),
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.lock_open,
+                size: 56,
+                color: palette.success,
+              ),
+              const SizedBox(height: 24),
+              Text(
+                'Memory baseline saved.',
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Your vault is now encrypted and ready. T.I.M. will only remember what you confirmed.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: palette.textSecondary, fontSize: 14, height: 1.4),
+              ),
+              const SizedBox(height: 32),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton(
+                  onPressed: () {
+                    ref.read(onboardingCompletedProvider.notifier).setCompleted(true);
+                    if (Navigator.of(context).canPop()) {
+                      Navigator.of(context).pop();
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: palette.primary,
+                    foregroundColor: Colors.black,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('Enter Chat Workspace', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 24),
-          ElevatedButton(
-            onPressed: () {
-              ref.read(onboardingCompletedProvider.notifier).setCompleted(true);
-              if (Navigator.of(context).canPop()) {
-                Navigator.of(context).pop();
-              }
-            },
-            child: const Text('Enter Chat Workspace'),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
-
