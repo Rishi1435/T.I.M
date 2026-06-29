@@ -171,8 +171,8 @@ class ModelController extends StateNotifier<ModelState> {
         downloadProgress: 1.0,
       );
       final path = await _downloader.ggufPath(m.id);
-      // GPU layers: full offload if VRAM >= minVram, else 0.
-      final gpuLayers = (_hw.dedicatedVramGb >= m.minVramGb) ? 99 : 0;
+      // GPU layers: full offload if VRAM >= minVram (only when minVram > 0), else 0.
+      final gpuLayers = (m.minVramGb > 0 && _hw.dedicatedVramGb >= m.minVramGb) ? 99 : 0;
       await _engine.loadModel(path, contextTokens: 4096, gpuLayers: gpuLayers);
       if (!mounted) return;
       state = state.copyWith(phase: ModelPhase.ready);

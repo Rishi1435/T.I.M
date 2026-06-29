@@ -1,7 +1,13 @@
+// ============================================================
+// lib/presentation/widgets/model_selection_dialog.dart
+// Redesigned premium model management dialog.
+// ============================================================
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/config/app_config.dart';
+import '../../core/theme/app_theme.dart';
 import '../providers/model_provider.dart';
 import '../providers/hardware_provider.dart';
 import 'override_modal.dart';
@@ -39,13 +45,21 @@ class _ModelSelectionDialogState extends ConsumerState<ModelSelectionDialog> {
     final modelState = ref.watch(modelProvider);
     final hardwareAsync = ref.watch(hardwareProvider);
     final controller = ref.read(modelProvider.notifier);
+    final theme = Theme.of(context);
+    final palette = theme.extension<TimPalette>()!;
 
     return AlertDialog(
-      title: const Row(
+      backgroundColor: palette.surface,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(24),
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+      ),
+      title: Row(
         children: [
-          Icon(Icons.settings_suggest_rounded, color: Color(0xFF8AB4F8), size: 28),
-          SizedBox(width: 12),
-          Text('Manage AI Models'),
+          Icon(Icons.settings_suggest_rounded, color: palette.primary, size: 28),
+          const SizedBox(width: 12),
+          const Text('Manage AI Models', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
         ],
       ),
       content: SizedBox(
@@ -57,21 +71,22 @@ class _ModelSelectionDialogState extends ConsumerState<ModelSelectionDialog> {
             // Current hardware stats
             hardwareAsync.maybeWhen(
               data: (p) => Container(
-                padding: const EdgeInsets.all(10),
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF1E1E2F),
-                  borderRadius: BorderRadius.circular(8),
+                  color: palette.surfaceVariant,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.info_outline, size: 16, color: Color(0xFF9AA0A6)),
+                    Icon(Icons.info_outline, size: 16, color: palette.muted),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         'Your system: ${p.totalRamGb.toStringAsFixed(0)}GB RAM | '
                         '${p.dedicatedVramGb.toStringAsFixed(0)}GB VRAM | '
                         '${p.isCharging ? "Charging" : "Battery"}',
-                        style: const TextStyle(fontSize: 11, color: Color(0xFF9AA0A6)),
+                        style: TextStyle(fontSize: 11, color: palette.textSecondary),
                       ),
                     ),
                   ],
@@ -79,12 +94,12 @@ class _ModelSelectionDialogState extends ConsumerState<ModelSelectionDialog> {
               ),
               orElse: () => const SizedBox.shrink(),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 20),
             const Text(
               'Select a model to load or download:',
-              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.white),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             Flexible(
               child: ListView(
                 shrinkWrap: true,
@@ -93,7 +108,6 @@ class _ModelSelectionDialogState extends ConsumerState<ModelSelectionDialog> {
                   final isSelected = modelState.selected?.id == model.id;
                   final isDownloaded = _downloadedCache[model.id] ?? false;
 
-                  // Check if this model is active/loaded
                   final isActive = isSelected && modelState.phase == ModelPhase.ready;
                   final isCurrentlyDownloading = isSelected && modelState.phase == ModelPhase.downloading;
                   final isCurrentlyPaused = isSelected && modelState.phase == ModelPhase.paused;
@@ -101,16 +115,16 @@ class _ModelSelectionDialogState extends ConsumerState<ModelSelectionDialog> {
 
                   return Container(
                     margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1E1E2F),
-                      borderRadius: BorderRadius.circular(8),
+                      color: palette.surfaceVariant,
+                      borderRadius: BorderRadius.circular(16),
                       border: Border.all(
                         color: isActive
-                            ? const Color(0xFF81C995)
+                            ? palette.success
                             : isCurrentlyDownloading
-                                ? const Color(0xFF8AB4F8)
-                                : const Color(0xFF3C3C5E),
+                                ? palette.primary
+                                : Colors.white.withValues(alpha: 0.05),
                         width: isActive ? 1.5 : 1.0,
                       ),
                     ),
@@ -122,62 +136,61 @@ class _ModelSelectionDialogState extends ConsumerState<ModelSelectionDialog> {
                             Expanded(
                               child: Text(
                                 model.label,
-                                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15, color: Colors.white),
                               ),
                             ),
                             if (isRecommended)
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF81C995).withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(4),
-                                  border: Border.all(color: const Color(0xFF81C995).withValues(alpha: 0.4)),
+                                  color: palette.success.withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: palette.success.withValues(alpha: 0.2)),
                                 ),
-                                child: const Text(
+                                child: Text(
                                   'Suggested',
-                                  style: TextStyle(color: Color(0xFF81C995), fontSize: 9, fontWeight: FontWeight.bold),
+                                  style: TextStyle(color: palette.success, fontSize: 10, fontWeight: FontWeight.bold),
                                 ),
                               ),
                           ],
                         ),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 6),
                         Text(
                           'Size: ${model.sizeGb.toStringAsFixed(1)} GB  •  '
                           'Min RAM: ${model.minRamGb.toStringAsFixed(0)} GB'
                           '${model.minVramGb > 0 ? "  •  Min VRAM: ${model.minVramGb.toStringAsFixed(0)} GB" : ""}',
-                          style: const TextStyle(color: Color(0xFF9AA0A6), fontSize: 11),
+                          style: TextStyle(color: palette.muted, fontSize: 12),
                         ),
-                        const SizedBox(height: 10),
-                        // Handle actions / progress for this model
+                        const SizedBox(height: 12),
                         if (isCurrentlyDownloading) ...[
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Text(
                                 'Downloading: ${(modelState.downloadProgress * 100).toStringAsFixed(0)}%',
-                                style: const TextStyle(color: Color(0xFF8AB4F8), fontSize: 11, fontWeight: FontWeight.w500),
+                                style: TextStyle(color: palette.primary, fontSize: 12, fontWeight: FontWeight.w500),
                               ),
                               TextButton.icon(
                                 style: TextButton.styleFrom(
                                   visualDensity: VisualDensity.compact,
-                                  foregroundColor: const Color(0xFFCF6679),
+                                  foregroundColor: palette.danger,
                                 ),
                                 icon: const Icon(Icons.pause, size: 14),
-                                label: const Text('Pause', style: TextStyle(fontSize: 11)),
+                                label: const Text('Pause', style: TextStyle(fontSize: 12)),
                                 onPressed: () {
                                   controller.pauseDownload();
                                 },
                               ),
                             ],
                           ),
-                          const SizedBox(height: 4),
+                          const SizedBox(height: 6),
                           ClipRRect(
-                            borderRadius: BorderRadius.circular(2),
+                            borderRadius: BorderRadius.circular(4),
                             child: LinearProgressIndicator(
                               value: modelState.downloadProgress,
                               minHeight: 4,
-                              backgroundColor: const Color(0xFF3C3C5E),
-                              valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF8AB4F8)),
+                              backgroundColor: Colors.black26,
+                              valueColor: AlwaysStoppedAnimation<Color>(palette.primary),
                             ),
                           ),
                         ] else if (isCurrentlyPaused) ...[
@@ -186,15 +199,15 @@ class _ModelSelectionDialogState extends ConsumerState<ModelSelectionDialog> {
                             children: [
                               Text(
                                 'Paused: ${(modelState.downloadProgress * 100).toStringAsFixed(0)}%',
-                                style: const TextStyle(color: Color(0xFFE57373), fontSize: 11, fontWeight: FontWeight.w500),
+                                style: const TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.w500),
                               ),
                               TextButton.icon(
                                 style: TextButton.styleFrom(
                                   visualDensity: VisualDensity.compact,
-                                  foregroundColor: const Color(0xFF8AB4F8),
+                                  foregroundColor: palette.primary,
                                 ),
                                 icon: const Icon(Icons.play_arrow, size: 14),
-                                label: const Text('Resume', style: TextStyle(fontSize: 11)),
+                                label: const Text('Resume', style: TextStyle(fontSize: 12)),
                                 onPressed: () async {
                                   await controller.downloadAndLoad();
                                   _checkAllDiskStatus();
@@ -202,14 +215,14 @@ class _ModelSelectionDialogState extends ConsumerState<ModelSelectionDialog> {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 4),
+                          const SizedBox(height: 6),
                           ClipRRect(
-                            borderRadius: BorderRadius.circular(2),
+                            borderRadius: BorderRadius.circular(4),
                             child: LinearProgressIndicator(
                               value: modelState.downloadProgress,
                               minHeight: 4,
-                              backgroundColor: const Color(0xFF3C3C5E),
-                              valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFE57373)),
+                              backgroundColor: Colors.black26,
+                              valueColor: const AlwaysStoppedAnimation<Color>(Colors.orangeAccent),
                             ),
                           ),
                         ] else if (isCurrentlyLoading) ...[
@@ -218,12 +231,12 @@ class _ModelSelectionDialogState extends ConsumerState<ModelSelectionDialog> {
                               SizedBox(
                                 width: 12,
                                 height: 12,
-                                child: CircularProgressIndicator(strokeWidth: 1.5, valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFFB74D))),
+                                child: CircularProgressIndicator(strokeWidth: 1.5, valueColor: AlwaysStoppedAnimation<Color>(Colors.orangeAccent)),
                               ),
                               SizedBox(width: 8),
                               Text(
                                 'Loading model into memory...',
-                                style: TextStyle(color: Color(0xFFFFB74D), fontSize: 11, fontWeight: FontWeight.w500),
+                                style: TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.w500),
                               ),
                             ],
                           ),
@@ -232,19 +245,21 @@ class _ModelSelectionDialogState extends ConsumerState<ModelSelectionDialog> {
                             mainAxisAlignment: MainAxisAlignment.end,
                             children: [
                               if (isActive)
-                                const Row(
+                                Row(
                                   children: [
-                                    Icon(Icons.check_circle_rounded, color: Color(0xFF81C995), size: 16),
-                                    SizedBox(width: 6),
-                                    Text('Active', style: TextStyle(color: Color(0xFF81C995), fontSize: 12, fontWeight: FontWeight.w600)),
+                                    Icon(Icons.check_circle_rounded, color: palette.success, size: 16),
+                                    const SizedBox(width: 6),
+                                    Text('Active', style: TextStyle(color: palette.success, fontSize: 13, fontWeight: FontWeight.w600)),
                                   ],
                                 )
                               else
                                 ElevatedButton(
                                   style: ElevatedButton.styleFrom(
-                                    minimumSize: const Size(0, 32),
+                                    minimumSize: const Size(0, 36),
                                     padding: const EdgeInsets.symmetric(horizontal: 16),
-                                    backgroundColor: isDownloaded ? const Color(0xFF1E5631) : const Color(0xFF3367D6),
+                                    backgroundColor: isDownloaded ? palette.success : palette.primary,
+                                    foregroundColor: Colors.black,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                   ),
                                   onPressed: () async {
                                     final risky = controller.selectManual(model);
@@ -262,7 +277,7 @@ class _ModelSelectionDialogState extends ConsumerState<ModelSelectionDialog> {
                                   },
                                   child: Text(
                                     isDownloaded ? 'Load Model' : 'Download & Load',
-                                    style: const TextStyle(fontSize: 12),
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                                   ),
                                 ),
                             ],
@@ -280,7 +295,7 @@ class _ModelSelectionDialogState extends ConsumerState<ModelSelectionDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Close'),
+          child: Text('Close', style: TextStyle(color: palette.primary, fontWeight: FontWeight.w600)),
         ),
       ],
     );
