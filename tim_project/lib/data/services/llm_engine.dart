@@ -52,7 +52,7 @@ class LlmEngine {
     _loading = true;
     try {
       _log.info('Loading model in background isolate: $ggufPath '
-                '(ctx=$contextTokens, gpu_layers=$gpuLayers)');
+          '(ctx=$contextTokens, gpu_layers=$gpuLayers)');
       // llama_cpp_dart on Windows uses DynamicLibrary.process() by default,
       // which requires llama symbols to be linked into the exe — they aren't.
       // Instead, tell it to use DynamicLibrary.open('llama.dll') so it loads
@@ -169,13 +169,14 @@ class LlmEngine {
         }
 
         if (shouldStop) {
-          _log.info('Stop sequence "$stopSeqFound" detected; stopping generation.');
+          _log.info(
+              'Stop sequence "$stopSeqFound" detected; stopping generation.');
           await scope.stop();
           break;
         }
 
         yield token;
-        
+
         if (produced >= maxTokens) {
           _log.warn('Hit maxTokens=$maxTokens; stopping generation.');
           await scope.stop();
@@ -195,8 +196,6 @@ class LlmEngine {
       }
     }
   }
-
-
 
   /// Compute a 384-dim embedding for `text` (used by sqlite-vec).
   Future<List<double>> embed(String text) async {

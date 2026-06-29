@@ -10,6 +10,7 @@ with "clue" before synthesis — so the spoken output always says "clue".
 
 from __future__ import annotations
 
+import logging
 import math
 import struct
 import asyncio

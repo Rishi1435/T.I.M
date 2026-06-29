@@ -3,10 +3,10 @@
 #                       pip install -r requirements.txt
 
 # WebSocket server
-websockets==12.0
+websockets>=12.0
 
 # Voice Activity Detection
-onnxruntime==1.17.0     # Silero VAD inference
+onnxruntime>=1.17.0     # Silero VAD inference
 
 # Speaker biometric (ECAPA-TDNN). Uncomment when ready to enrol:
 # speechbrain==1.0.0
@@ -29,8 +29,8 @@ onnxruntime==1.17.0     # Silero VAD inference
 # Place ffmpeg.exe + ffprobe.exe next to audio_server.py
 
 # SearXNG scraper (just httpx — SearXNG itself runs as a separate service)
-httpx==0.26.0
+httpx>=0.26.0
 
 # Utilities
-numpy==1.26.3
-pydantic==2.6.0
+numpy>=1.26.0
+pydantic>=2.6.0
