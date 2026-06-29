@@ -11,15 +11,18 @@ class AppTheme {
 
   // ---- Palette ----------------------------------------------------
   static const Color _bg = Color(0xFF000000);
-  static const Color _surface = Color(0xFF07080A);
-  static const Color _surfaceVariant = Color(0xFF0F1014);
-  static const Color _primary = Color(0xFF8AB4F8);
-  static const Color _onPrimary = Color(0xFF06111F);
-  static const Color _accent = Color(0xFFE8F0FE);
-  static const Color _muted = Color(0xFF9AA0A6);
+  static const Color _bgGlow = Color(0xFF131722);
+  static const Color _surface = Color(0xFF1E1F20);
+  static const Color _surfaceVariant = Color(0xFF282A2C);
+  static const Color _surfaceHover = Color(0xFF333537);
+  static const Color _primary = Color(0xFFA8C7FA);
+  static const Color _onPrimary = Color(0xFF000000);
+  static const Color _accent = Color(0xFFE3E3E3); // text-primary
+  static const Color _textSecondary = Color(0xFFC4C7C5);
+  static const Color _muted = Color(0xFF8E918F); // text-tertiary
   static const Color _danger = Color(0xFFF28B82);
   static const Color _success = Color(0xFF81C995);
-  static const Color _warning = Color(0xFFFDD663);
+  static const Color _warning = Color(0xFFF28B82);
 
   static ThemeData get dark {
     final scheme = ColorScheme.fromSeed(
@@ -41,7 +44,7 @@ class AppTheme {
       dividerColor: _surfaceVariant,
       textTheme: Typography.whiteCupertino.copyWith(
         bodyLarge: const TextStyle(color: _accent, fontSize: 16),
-        bodyMedium: const TextStyle(color: _accent, fontSize: 14),
+        bodyMedium: const TextStyle(color: _textSecondary, fontSize: 14),
         titleLarge: const TextStyle(
           color: _accent,
           fontSize: 22,
@@ -85,9 +88,13 @@ class AppTheme {
       extensions: const [
         TimPalette(
           bg: _bg,
+          bgGlow: _bgGlow,
           surface: _surface,
+          surfaceVariant: _surfaceVariant,
+          surfaceHover: _surfaceHover,
           primary: _primary,
           accent: _accent,
+          textSecondary: _textSecondary,
           muted: _muted,
           danger: _danger,
           success: _success,
@@ -104,9 +111,13 @@ class AppTheme {
 class TimPalette extends ThemeExtension<TimPalette> {
   const TimPalette({
     required this.bg,
+    required this.bgGlow,
     required this.surface,
+    required this.surfaceVariant,
+    required this.surfaceHover,
     required this.primary,
     required this.accent,
+    required this.textSecondary,
     required this.muted,
     required this.danger,
     required this.success,
@@ -114,9 +125,13 @@ class TimPalette extends ThemeExtension<TimPalette> {
   });
 
   final Color bg;
+  final Color bgGlow;
   final Color surface;
+  final Color surfaceVariant;
+  final Color surfaceHover;
   final Color primary;
   final Color accent;
+  final Color textSecondary;
   final Color muted;
   final Color danger;
   final Color success;
@@ -124,13 +139,18 @@ class TimPalette extends ThemeExtension<TimPalette> {
 
   @override
   TimPalette copyWith({
-    Color? bg, Color? surface, Color? primary, Color? accent,
+    Color? bg, Color? bgGlow, Color? surface, Color? surfaceVariant,
+    Color? surfaceHover, Color? primary, Color? accent, Color? textSecondary,
     Color? muted, Color? danger, Color? success, Color? warning,
   }) => TimPalette(
     bg: bg ?? this.bg,
+    bgGlow: bgGlow ?? this.bgGlow,
     surface: surface ?? this.surface,
+    surfaceVariant: surfaceVariant ?? this.surfaceVariant,
+    surfaceHover: surfaceHover ?? this.surfaceHover,
     primary: primary ?? this.primary,
     accent: accent ?? this.accent,
+    textSecondary: textSecondary ?? this.textSecondary,
     muted: muted ?? this.muted,
     danger: danger ?? this.danger,
     success: success ?? this.success,
@@ -142,9 +162,13 @@ class TimPalette extends ThemeExtension<TimPalette> {
     if (other is! TimPalette) return this;
     return TimPalette(
       bg: Color.lerp(bg, other.bg, t)!,
+      bgGlow: Color.lerp(bgGlow, other.bgGlow, t)!,
       surface: Color.lerp(surface, other.surface, t)!,
+      surfaceVariant: Color.lerp(surfaceVariant, other.surfaceVariant, t)!,
+      surfaceHover: Color.lerp(surfaceHover, other.surfaceHover, t)!,
       primary: Color.lerp(primary, other.primary, t)!,
       accent: Color.lerp(accent, other.accent, t)!,
+      textSecondary: Color.lerp(textSecondary, other.textSecondary, t)!,
       muted: Color.lerp(muted, other.muted, t)!,
       danger: Color.lerp(danger, other.danger, t)!,
       success: Color.lerp(success, other.success, t)!,

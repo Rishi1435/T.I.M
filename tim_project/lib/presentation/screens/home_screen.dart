@@ -1,27 +1,29 @@
 // ============================================================
 // lib/presentation/screens/home_screen.dart
-// Phase 1 — Gemini-style layout: collapsible sidebar + dynamic main
-// workspace with a universal drag-and-drop input zone. File chips
-// render visually before sending.
+// Overhauled home screen: collapsible sidebar navigation,
+// radial gradient background, view-pane switcher, mode switcher,
+// and premium chat input pill.
 // ============================================================
 
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/theme/app_theme.dart';
+import '../../data/models/file_chip.dart';
 import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
 import '../providers/hardware_provider.dart';
 import '../providers/model_provider.dart';
 import '../providers/voice_provider.dart';
-import '../widgets/chat_input.dart';
 import '../widgets/file_chip_row.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/sidebar.dart';
-import '../widgets/voice_indicator.dart';
 import '../widgets/model_selection_dialog.dart';
 import 'genesis_screen.dart';
 import 'live_call_screen.dart';
 import 'profile_screen.dart';
+import 'settings_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -32,10 +34,15 @@ class HomeScreen extends ConsumerStatefulWidget {
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _sidebarExpanded = true;
+  String _activeView = 'home'; // 'home', 'profile', 'settings'
+  String _activeMode = 'chat'; // 'chat', 'live', 'screen'
+  final _inputCtrl = TextEditingController();
   final ScrollController _scrollCtrl = ScrollController();
+  bool _dragging = false;
 
   @override
   void dispose() {
+    _inputCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
   }
@@ -52,231 +59,582 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     });
   }
 
+  void _send() {
+    final text = _inputCtrl.text.trim();
+    if (text.isEmpty) return;
+    ref.read(chatProvider.notifier).sendText(text);
+    _inputCtrl.clear();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final chat  = ref.watch(chatProvider);
-    final hw    = ref.watch(hardwareProvider);
+    final chat = ref.watch(chatProvider);
+    final hw = ref.watch(hardwareProvider);
     final model = ref.watch(modelProvider);
     final voice = ref.watch(voiceCallProvider);
     final onboardingDone = ref.watch(onboardingCompletedProvider);
+    final theme = Theme.of(context);
+    final palette = theme.extension<TimPalette>()!;
 
     // Auto-scroll when tokens arrive
     if (chat.isGenerating) _scrollToBottom();
 
+    // Determine main view-pane
+    Widget mainPane;
+    if (_activeView == 'profile') {
+      mainPane = const ProfileScreen();
+    } else if (_activeView == 'settings') {
+      mainPane = const SettingsScreen();
+    } else {
+      // Home / Chat session view
+      mainPane = _buildHomePane(context, chat, onboardingDone, palette, model);
+    }
+
     return Scaffold(
-      body: Stack(
-        children: [
-          Row(
+      body: DropTarget(
+        onDragDone: (details) {
+          for (final f in details.files) {
+            final chip = FileChip(
+              id: DateTime.now().microsecondsSinceEpoch.toString(),
+              name: f.name,
+              kind: FileChip.inferKind(f.name),
+              sizeBytes: 0,
+              localUri: f.path,
+            );
+            ref.read(chatProvider.notifier).addFileChip(chip);
+          }
+        },
+        onDragEntered: (_) => setState(() => _dragging = true),
+        onDragExited: (_) => setState(() => _dragging = false),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: const Alignment(0.0, -0.4),
+              radius: 1.2,
+              colors: [
+                _dragging ? palette.surfaceHover : palette.bgGlow,
+                palette.bg,
+              ],
+              stops: const [0.0, 0.8],
+            ),
+          ),
+          child: Stack(
             children: [
-              // ----- Sidebar -----
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                width: _sidebarExpanded ? 264 : 72,
-                child: Sidebar(
-                  expanded: _sidebarExpanded,
-                  onToggle: () =>
-                      setState(() => _sidebarExpanded = !_sidebarExpanded),
-                ),
-              ),
-              // ----- Main workspace -----
-              Expanded(
-                child: Column(
-                  children: [
-                    // Top bar: hardware + model + connection status
-                    Material(
-                      color: Theme.of(context).colorScheme.surface,
-                      elevation: 0.5,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 10,
-                        ),
-                        child: Row(
-                          children: [
-                            Text(
-                              'T.I.M.',
-                              style: Theme.of(context).textTheme.titleLarge,
-                            ),
-                            const Spacer(),
-                            // Hardware badge
-                            hw.when(
-                              data: (p) => Tooltip(
-                                message: p.toString(),
-                                child: Chip(
-                                  label: Text(
+              Row(
+                children: [
+                  // Collapsible Sidebar
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: _sidebarExpanded ? 280 : 72,
+                    child: Sidebar(
+                      expanded: _sidebarExpanded,
+                      onToggle: () => setState(() => _sidebarExpanded = !_sidebarExpanded),
+                      activeView: _activeView,
+                      onViewChanged: (view) => setState(() {
+                        _activeView = view;
+                        // Reset modes when shifting views
+                        if (view == 'home') _activeMode = 'chat';
+                      }),
+                      onNewSession: () {
+                        // Clear active session
+                        ref.read(chatProvider.notifier).clearHistory();
+                      },
+                      onWorkspaceSelected: (workspace) {
+                        setState(() {
+                          _activeView = 'home';
+                          _activeMode = 'chat';
+                        });
+                        // Simulate loading historic conversation workspace
+                        ref.read(chatProvider.notifier).clearHistory();
+                        ref.read(chatProvider.notifier).addSystem('Loaded Workspace: $workspace');
+                      },
+                    ),
+                  ),
+
+                  // Main View-Pane
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        Positioned.fill(child: mainPane),
+
+                        // Floating Top Bar actions (Hardware, Model selectors, Status, Sign out)
+                        Positioned(
+                          top: 16,
+                          right: 24,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Hardware stats
+                              hw.when(
+                                data: (p) => Tooltip(
+                                  message: p.toString(),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withValues(alpha: 0.05),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                                    ),
+                                    child: Text(
                                       '${p.totalRamGb.toStringAsFixed(0)}GB RAM • '
                                       '${p.dedicatedVramGb.toStringAsFixed(0)}GB VRAM • '
-                                      '${p.batteryStatusString}'),
-                                ),
-                              ),
-                              loading: () => const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              ),
-                              error: (_, __) => const SizedBox.shrink(),
-                            ),
-                            const SizedBox(width: 8),
-                            // Model badge
-                            _ModelBadge(state: model),
-                            const SizedBox(width: 8),
-                            Icon(
-                              chat.connected
-                                  ? Icons.cloud_done
-                                  : Icons.cloud_off,
-                              size: 18,
-                              color: chat.connected
-                                  ? Colors.green
-                                  : Colors.redAccent,
-                            ),
-                            const SizedBox(width: 16),
-                            IconButton(
-                              tooltip: 'Profile & Memory Vault',
-                              icon: const Icon(Icons.account_circle, size: 18),
-                              onPressed: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const ProfileScreen(),
-                                  ),
-                                );
-                              },
-                            ),
-                            const SizedBox(width: 8),
-                            IconButton(
-                              tooltip: 'Sign out',
-                              icon: const Icon(Icons.logout, size: 18),
-                              onPressed: () =>
-                                  ref.read(authProvider.notifier).signOut(),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    // Thin generating progress shimmer
-                    if (chat.isGenerating)
-                      const LinearProgressIndicator(
-                        minHeight: 2,
-                        backgroundColor: Colors.transparent,
-                        valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8AB4F8)),
-                      ),
-                    if (!onboardingDone)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1E1E2F),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: const Color(0xFF3C3C5E)),
-                          ),
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  const Icon(Icons.auto_awesome, color: Color(0xFFFFB74D), size: 20),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    'Help T.I.M. get to know you',
-                                    style: Theme.of(context).textTheme.titleSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              const Text(
-                                "I don't know anything about you to start our journey. For a better experience, please give me some of your information.",
-                                style: TextStyle(color: Color(0xFF9AA0A6), fontSize: 13),
-                              ),
-                              const SizedBox(height: 12),
-                              ElevatedButton.icon(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFF3367D6),
-                                  minimumSize: const Size(0, 36),
-                                ),
-                                icon: const Icon(Icons.rocket_launch, size: 16),
-                                label: const Text('Go to Genesis Onboarding', style: TextStyle(fontSize: 12)),
-                                onPressed: () {
-                                  Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => const GenesisScreen(),
+                                      '${p.batteryStatusString}',
+                                      style: TextStyle(color: palette.textSecondary, fontSize: 11),
                                     ),
-                                  );
-                                },
+                                  ),
+                                ),
+                                loading: () => const SizedBox(
+                                  width: 12,
+                                  height: 12,
+                                  child: CircularProgressIndicator(strokeWidth: 1.5),
+                                ),
+                                error: (_, __) => const SizedBox.shrink(),
+                              ),
+                              const SizedBox(width: 8),
+
+                              // Model selection
+                              _ModelBadge(state: model),
+                              const SizedBox(width: 8),
+
+                              // Connection status
+                              Icon(
+                                chat.connected ? Icons.cloud_done : Icons.cloud_off,
+                                size: 16,
+                                color: chat.connected ? palette.success : palette.danger,
+                              ),
+                              const SizedBox(width: 8),
+
+                              // Sign out
+                              IconButton(
+                                tooltip: 'Sign out',
+                                icon: Icon(Icons.logout, size: 16, color: palette.textSecondary),
+                                onPressed: () => ref.read(authProvider.notifier).signOut(),
                               ),
                             ],
                           ),
                         ),
-                      ),
-                    // Chat history
-                    Expanded(
-                      child: ListView.builder(
-                        controller: _scrollCtrl,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 16,
-                        ),
-                        itemCount: chat.messages.length,
-                        itemBuilder: (_, i) {
-                          final msg = chat.messages[i];
-                          final isStreaming = chat.isGenerating &&
-                              msg.id == chat.streamingMessageId;
-                          return MessageBubble(
-                            message: msg,
-                            isStreaming: isStreaming,
-                          );
-                        },
-                      ),
+                      ],
                     ),
-                    // Pending file chips
-                    if (chat.pendingChips.isNotEmpty)
-                      FileChipRow(chips: chat.pendingChips),
-                    // Voice / input dock
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surface,
-                        border: Border(
-                          top: BorderSide(
-                            color: Colors.white.withValues(alpha: 0.05),
+                  ),
+                ],
+              ),
+
+              // Full-screen Live Call Waveform overlay (obscures screen on active speech)
+              if (voice.active)
+                Positioned.fill(
+                  child: Container(
+                    color: Colors.black,
+                    child: const LiveCallView(),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHomePane(
+    BuildContext context,
+    ChatState chat,
+    bool onboardingDone,
+    TimPalette palette,
+    ModelState model,
+  ) {
+    final showGreeting = chat.messages.isEmpty && _activeMode == 'chat';
+
+    return Column(
+      children: [
+        const SizedBox(height: 24),
+        // Floating Mode Switcher
+        _buildModeSwitcher(palette),
+
+        if (chat.isGenerating && _activeMode == 'chat')
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            child: LinearProgressIndicator(
+              minHeight: 2,
+              backgroundColor: Colors.transparent,
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFA8C7FA)),
+            ),
+          ),
+
+        if (!onboardingDone && _activeMode == 'chat')
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+            child: Container(
+              decoration: BoxDecoration(
+                color: palette.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+              ),
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.auto_awesome, color: Color(0xFFFFB74D), size: 20),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Help T.I.M. get to know you',
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleSmall
+                            ?.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    "I don't know anything about you to start our journey. For a better experience, please give me some of your information.",
+                    style: TextStyle(color: palette.textSecondary, fontSize: 13),
+                  ),
+                  const SizedBox(height: 12),
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: palette.primary,
+                      foregroundColor: Colors.black,
+                      minimumSize: const Size(0, 36),
+                    ),
+                    icon: const Icon(Icons.rocket_launch, size: 16),
+                    label: const Text('Go to Genesis Onboarding', style: TextStyle(fontSize: 12)),
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const GenesisScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+        // Middle Viewport
+        Expanded(
+          child: _activeMode == 'live'
+              ? _buildVoicePane(palette)
+              : _activeMode == 'screen'
+                  ? _buildScreenPane(palette)
+                  : showGreeting
+                      ? Center(
+                          child: Text(
+                            'Hi Rishi, let\'s get into it',
+                            style: TextStyle(
+                              color: palette.accent,
+                              fontSize: 32,
+                              fontWeight: FontWeight.w500,
+                              letterSpacing: -0.4,
+                            ),
                           ),
+                        )
+                      : ListView.builder(
+                          controller: _scrollCtrl,
+                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                          itemCount: chat.messages.length,
+                          itemBuilder: (_, i) {
+                            final msg = chat.messages[i];
+                            final isStreaming = chat.isGenerating && msg.id == chat.streamingMessageId;
+                            return MessageBubble(
+                              message: msg,
+                              isStreaming: isStreaming,
+                            );
+                          },
                         ),
-                      ),
-                      child: Column(
-                        children: [
-                          if (chat.voice != VoiceState.idle)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: VoiceIndicator(state: chat.voice),
-                            ),
-                          if (chat.isGenerating)
-                            // ── Stop button ──────────────────────────────
-                            _StopButton(
-                              onStop: () => ref.read(chatProvider.notifier).stopGeneration(),
-                            )
-                          else
-                            ChatInput(
-                              onSend: (text) =>
-                                  ref.read(chatProvider.notifier).sendText(text),
-                            ),
-                        ],
-                      ),
-                    ),
+        ),
+
+        // File chips rendering
+        if (chat.pendingChips.isNotEmpty && _activeMode == 'chat')
+          FileChipRow(chips: chat.pendingChips),
+
+        // Input pill (always visible in Chat mode, or adapted stops)
+        if (_activeMode == 'chat')
+          Padding(
+            padding: const EdgeInsets.all(24),
+            child: _buildInputPill(chat, palette, model),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildModeSwitcher(TimPalette palette) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+      ),
+      padding: const EdgeInsets.all(4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildModeButton('chat', Icons.chat_bubble_outline, 'Chat', palette),
+          _buildModeButton('live', Icons.graphic_eq, 'Live Call', palette),
+          _buildModeButton('screen', Icons.screen_share_outlined, 'Screen Share', palette),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildModeButton(String mode, IconData icon, String label, TimPalette palette) {
+    final isActive = _activeMode == mode;
+    return GestureDetector(
+      onTap: () => setState(() => _activeMode = mode),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: isActive ? palette.surfaceVariant : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 18,
+              color: isActive ? Colors.white : palette.textSecondary,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: isActive ? Colors.white : palette.textSecondary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVoicePane(TimPalette palette) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            'Ready for a mock interview?',
+            style: TextStyle(
+              color: palette.accent,
+              fontSize: 24,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Press the mic button below to start the live call session.',
+            style: TextStyle(color: palette.muted, fontSize: 14),
+          ),
+          const SizedBox(height: 32),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: palette.primary,
+              foregroundColor: Colors.black,
+              minimumSize: const Size(200, 56),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+            ),
+            icon: const Icon(Icons.mic, size: 24),
+            label: const Text('Start Live Call', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            onPressed: () {
+              ref.read(voiceCallProvider.notifier).startCall();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildScreenPane(TimPalette palette) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            'What are we looking at?',
+            style: TextStyle(
+              color: palette.accent,
+              fontSize: 24,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'T.I.M. can capture and analyze your active display workspace.',
+            style: TextStyle(color: palette.muted, fontSize: 14),
+          ),
+          const SizedBox(height: 32),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: palette.primary,
+              foregroundColor: Colors.black,
+              minimumSize: const Size(220, 56),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+            ),
+            icon: const Icon(Icons.screen_share, size: 24),
+            label: const Text('Scan Active Screen', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            onPressed: () {
+              // Send the trigger phrase to run the vision pipeline
+              ref.read(chatProvider.notifier).sendText("look at my screen");
+              setState(() => _activeMode = 'chat');
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInputPill(ChatState chat, TimPalette palette, ModelState model) {
+    if (chat.isGenerating) {
+      return Container(
+        height: 56,
+        alignment: Alignment.center,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              'T.I.M. is thinking…',
+              style: TextStyle(color: palette.muted, fontSize: 14),
+            ),
+            const SizedBox(width: 24),
+            OutlinedButton.icon(
+              onPressed: () => ref.read(chatProvider.notifier).stopGeneration(),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: palette.danger,
+                side: BorderSide(color: palette.danger),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              ),
+              icon: const Icon(Icons.stop),
+              label: const Text('Stop'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      constraints: const BoxConstraints(maxWidth: 820, maxHeight: 120),
+      decoration: BoxDecoration(
+        color: palette.surface,
+        borderRadius: BorderRadius.circular(32),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: [
+          // Attachment options (+)
+          PopupMenuButton<String>(
+            icon: Icon(Icons.add, color: palette.textSecondary),
+            tooltip: 'Add files/context',
+            onSelected: (value) {
+              if (value == 'context') {
+                setState(() => _activeView = 'profile');
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Drag and drop files/folders directly into this window to attach them.'),
+                  ),
+                );
+              }
+            },
+            itemBuilder: (ctx) => [
+              PopupMenuItem(
+                value: 'upload',
+                child: Row(
+                  children: [
+                    Icon(Icons.upload_file, size: 18, color: palette.textSecondary),
+                    const SizedBox(width: 12),
+                    const Text('Upload files'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'folder',
+                child: Row(
+                  children: [
+                    Icon(Icons.folder_open, size: 18, color: palette.textSecondary),
+                    const SizedBox(width: 12),
+                    const Text('Add local folder'),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
+              PopupMenuItem(
+                value: 'context',
+                child: Row(
+                  children: [
+                    Icon(Icons.memory, size: 18, color: palette.textSecondary),
+                    const SizedBox(width: 12),
+                    const Text('Provide context block'),
                   ],
                 ),
               ),
             ],
           ),
-          // ----- Live Call overlay (Phase 5) -----
-          if (voice.active)
-            Positioned.fill(
-              child: IgnorePointer(
-                ignoring: false,
-                child: _LiveCallOverlay(),
+          const SizedBox(width: 8),
+
+          // Message input field
+          Expanded(
+            child: TextField(
+              controller: _inputCtrl,
+              decoration: InputDecoration(
+                hintText: _dragging ? 'Drop files here…' : 'Message T.I.M. (or drag files)…',
+                hintStyle: TextStyle(color: palette.muted),
+                border: InputBorder.none,
+                fillColor: Colors.transparent,
+                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+              onSubmitted: (_) => _send(),
+            ),
+          ),
+          const SizedBox(width: 8),
+
+          // Model selector dropdown
+          GestureDetector(
+            onTap: () {
+              showDialog<void>(
+                context: context,
+                builder: (_) => const ModelSelectionDialog(),
+              );
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: palette.surfaceVariant,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                children: [
+                  Text(
+                    model.selected?.label ?? 'Qwen3 14B',
+                    style: TextStyle(color: palette.textSecondary, fontSize: 13, fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(Icons.expand_more, size: 16, color: palette.textSecondary),
+                ],
               ),
             ),
+          ),
+          const SizedBox(width: 12),
+
+          // Microphone / Send button
+          IconButton(
+            icon: Icon(
+              _inputCtrl.text.trim().isNotEmpty ? Icons.send : Icons.mic,
+              color: palette.textSecondary,
+            ),
+            onPressed: () {
+              if (_inputCtrl.text.trim().isNotEmpty) {
+                _send();
+              } else {
+                ref.read(voiceCallProvider.notifier).startCall();
+              }
+            },
+          ),
         ],
       ),
     );
@@ -289,172 +647,24 @@ class _ModelBadge extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final Widget chip;
-    if (state.phase == ModelPhase.ready && state.selected != null) {
-      chip = ActionChip(
-        avatar: const Icon(Icons.memory, size: 16, color: Color(0xFF81C995)),
-        label: Text('${state.selected!.label} (Change)'),
-        onPressed: () => _showSelectionDialog(context),
-      );
-    } else if (state.phase == ModelPhase.downloading) {
-      chip = ActionChip(
-        avatar: const SizedBox(
-          width: 14,
-          height: 14,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8AB4F8)),
-          ),
-        ),
-        label: Text(
-          'Downloading ${(state.downloadProgress * 100).toStringAsFixed(0)}%',
-        ),
-        onPressed: () => _showSelectionDialog(context),
-      );
-    } else if (state.phase == ModelPhase.paused) {
-      chip = ActionChip(
-        avatar: const Icon(Icons.pause, size: 16, color: Color(0xFFE57373)),
-        label: Text(
-          'Paused ${(state.downloadProgress * 100).toStringAsFixed(0)}%',
-        ),
-        onPressed: () => _showSelectionDialog(context),
-      );
-    } else if (state.phase == ModelPhase.loading) {
-      chip = ActionChip(
-        avatar: const SizedBox(
-          width: 14,
-          height: 14,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFFB74D)),
-          ),
-        ),
-        label: const Text('Loading model…'),
-        onPressed: () => _showSelectionDialog(context),
-      );
-    } else if (state.phase == ModelPhase.error) {
-      chip = ActionChip(
-        avatar: const Icon(Icons.error, size: 16, color: Colors.redAccent),
-        label: const Text('Model error (Click to fix)'),
-        onPressed: () => _showSelectionDialog(context),
-      );
-    } else {
-      final rec = state.recommended;
-      if (rec != null) {
-        chip = ActionChip(
-          avatar: const Icon(Icons.download, size: 16, color: Color(0xFF8AB4F8)),
-          label: Text('Get ${rec.label} (${rec.sizeGb.toStringAsFixed(1)} GB)'),
-          onPressed: () => _showSelectionDialog(context),
+    final theme = Theme.of(context);
+    final palette = theme.extension<TimPalette>()!;
+    final label = state.selected?.label ?? 'Change model';
+
+    return ActionChip(
+      avatar: Icon(Icons.memory, size: 14, color: palette.primary),
+      label: Text(
+        label,
+        style: TextStyle(color: palette.textSecondary, fontSize: 11),
+      ),
+      backgroundColor: Colors.white.withValues(alpha: 0.05),
+      side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+      onPressed: () {
+        showDialog<void>(
+          context: context,
+          builder: (_) => const ModelSelectionDialog(),
         );
-      } else {
-        chip = ActionChip(
-          avatar: const Icon(Icons.download, size: 16),
-          label: const Text('Get a model'),
-          onPressed: () => _showSelectionDialog(context),
-        );
-      }
-    }
-    return chip;
-  }
-
-  void _showSelectionDialog(BuildContext context) {
-    showDialog<void>(
-      context: context,
-      builder: (_) => const ModelSelectionDialog(),
-    );
-  }
-}
-
-class _LiveCallOverlay extends ConsumerWidget {
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // Pull the LiveCallView widget up from the widgets layer so this
-    // file stays focused on layout composition.
-    return const Material(
-      color: Colors.black,
-      child: LiveCallView(),
-    );
-  }
-}
-
-/// Animated stop button shown in the input dock while the LLM is generating.
-class _StopButton extends StatefulWidget {
-  const _StopButton({required this.onStop});
-  final VoidCallback onStop;
-
-  @override
-  State<_StopButton> createState() => _StopButtonState();
-}
-
-class _StopButtonState extends State<_StopButton>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-  late final Animation<double> _pulse;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    )..repeat(reverse: true);
-    _pulse = Tween<double>(begin: 0.6, end: 1.0).animate(
-      CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut),
-    );
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        // Pulsing generation indicator
-        FadeTransition(
-          opacity: _pulse,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Color(0xFF8AB4F8),
-                ),
-              ),
-              const SizedBox(width: 8),
-              const Text(
-                'T.I.M. is thinking…',
-                style: TextStyle(
-                  color: Color(0xFF9AA0A6),
-                  fontSize: 13,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 24),
-        // Stop button
-        OutlinedButton.icon(
-          onPressed: widget.onStop,
-          style: OutlinedButton.styleFrom(
-            foregroundColor: const Color(0xFFE57373),
-            side: const BorderSide(color: Color(0xFFE57373), width: 1),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-            ),
-          ),
-          icon: const Icon(Icons.stop_rounded, size: 16),
-          label: const Text('Stop', style: TextStyle(fontSize: 13)),
-        ),
-      ],
+      },
     );
   }
 }

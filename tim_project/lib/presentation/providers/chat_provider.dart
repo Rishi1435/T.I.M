@@ -438,6 +438,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   void _addSystem(String text) => _addMessage(MessageSender.system, text);
 
+  void clearHistory() {
+    state = state.copyWith(messages: const []);
+  }
+
+  void addSystem(String text) => _addSystem(text);
+
   /// Add a pending file chip to the input dock (drag-and-drop).
   void addFileChip(FileChip chip) {
     state = state.copyWith(

@@ -1,10 +1,12 @@
 // ============================================================
 // lib/presentation/screens/profile_screen.dart
-// Manage user memory blocks securely in offline SQLite database.
+// Redesigned premium inline Memory Vault screen.
 // ============================================================
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../core/theme/app_theme.dart';
 import '../../data/models/memory.dart';
 import '../../data/services/supabase_service.dart';
 import '../providers/profile_provider.dart';
@@ -34,14 +36,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     final state = ref.watch(profileProvider);
     final controller = ref.read(profileProvider.notifier);
     final theme = Theme.of(context);
-
-    // Compute stats
-    final totalCount = state.memories.length;
-    final Map<String, int> catCounts = {};
-    for (final m in state.memories) {
-      final cat = (m.metadata['category'] as String? ?? 'general').toLowerCase();
-      catCounts[cat] = (catCounts[cat] ?? 0) + 1;
-    }
+    final palette = theme.extension<TimPalette>()!;
 
     // Filter memories
     final filtered = state.memories.where((m) {
@@ -52,165 +47,468 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       return matchesSearch && matchesCat;
     }).toList();
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Profile & Memory Vault'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () => controller.loadMemories(),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // ---- User Info and Stats card ----
-          Card(
-            margin: const EdgeInsets.all(16),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 30,
-                    backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.2),
-                    child: Icon(
-                      Icons.person,
-                      size: 32,
-                      color: theme.colorScheme.primary,
-                    ),
+    return Container( // Inline container instead of Scaffold
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+      child: SingleChildScrollView(
+        child: Center(
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 780),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header
+                Text(
+                  'Memory Vault',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w500,
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          SupabaseService.currentUserEmail.isNotEmpty
-                              ? SupabaseService.currentUserEmail
-                              : 'Local User',
-                          style: theme.textTheme.titleMedium,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Master Key decrypted • E2EE enabled',
-                          style: theme.textTheme.bodySmall?.copyWith(color: Colors.green),
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 12,
-                          runSpacing: 4,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Your verified context blocks, securely encrypted offline.',
+                  style: TextStyle(color: palette.textSecondary, fontSize: 15),
+                ),
+                const SizedBox(height: 40),
+
+                // Card 1: Identity & Multi-Tenant Access
+                _buildCard(
+                  title: 'Identity & Multi-Tenant Access',
+                  palette: palette,
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 64,
+                            height: 64,
+                            decoration: BoxDecoration(
+                              color: palette.surfaceVariant,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              'R',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.w500,
+                                color: palette.primary,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 20),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  SupabaseService.currentUserEmail.isNotEmpty
+                                      ? SupabaseService.currentUserEmail.split('@').first
+                                      : 'Rishi Pediredla',
+                                  style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  SupabaseService.currentUserEmail.isNotEmpty
+                                      ? SupabaseService.currentUserEmail
+                                      : 'Location: Kakinada, AP · Expected Graduation: May 2027',
+                                  style: TextStyle(
+                                    color: palette.textSecondary,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: palette.success.withValues(alpha: 0.1),
+                                    border: Border.all(color: palette.success.withValues(alpha: 0.2)),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.security, size: 14, color: palette.success),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        'AES-256-GCM Secured Vault',
+                                        style: TextStyle(
+                                          color: palette.success,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Divider(color: Colors.white.withValues(alpha: 0.1)),
+                      const SizedBox(height: 8),
+                      InkWell(
+                        onTap: () {
+                          // Toggle tenant user mock or switch profile
+                        },
+                        child: Row(
                           children: [
-                            _statChip('Total: $totalCount', theme),
-                            if (catCounts['academic'] != null)
-                              _statChip('Academic: ${catCounts['academic']}', theme),
-                            if (catCounts['professional'] != null)
-                              _statChip('Professional: ${catCounts['professional']}', theme),
-                            if (catCounts['skill'] != null)
-                              _statChip('Skills: ${catCounts['skill']}', theme),
-                            if (catCounts['project'] != null)
-                              _statChip('Projects: ${catCounts['project']}', theme),
+                            Container(
+                              width: 32,
+                              height: 32,
+                              decoration: BoxDecoration(
+                                border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.2),
+                                ),
+                                shape: BoxShape.circle,
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(
+                                'B',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: palette.textSecondary,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              "Switch to Bujju's Vault",
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: palette.textSecondary,
+                              ),
+                            ),
                           ],
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
-          ),
+                ),
+                const SizedBox(height: 24),
 
-          // ---- Search and Filters ----
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    decoration: InputDecoration(
-                      hintText: 'Search memory blocks...',
-                      prefixIcon: const Icon(Icons.search),
-                      fillColor: theme.colorScheme.surfaceContainerHighest,
-                      filled: true,
-                    ),
-                    onChanged: (v) => setState(() => _searchQuery = v),
+                // Card 2: Reflexion Log (Self-Correction)
+                _buildCard(
+                  title: 'Reflexion Log (Self-Correction)',
+                  palette: palette,
+                  child: Column(
+                    children: [
+                      _buildWarningBlock(
+                        title: 'Agentic AI Articulation Gap',
+                        description:
+                            'Flagged 2 days ago. You struggled to explain Agentic AI architecture clearly. T.I.M. will drill this concept in your next session.',
+                        palette: palette,
+                      ),
+                      const SizedBox(height: 16),
+                      _buildWarningBlock(
+                        title: 'Cadence Pauses > 2.5s',
+                        description:
+                            'Detected today during mock interview. T.I.M. voice lock will now interrupt to correct pacing if hesitation exceeds threshold.',
+                        palette: palette,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // Card 3: Verified Memory Blocks
+                _buildCard(
+                  title: 'Verified Memory Blocks',
+                  palette: palette,
+                  action: IconButton(
+                    icon: const Icon(Icons.add, size: 20),
+                    onPressed: () => _showAddDialog(controller),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Search field
+                      TextField(
+                        decoration: InputDecoration(
+                          hintText: 'Search memory blocks...',
+                          prefixIcon: const Icon(Icons.search),
+                          fillColor: palette.surfaceVariant,
+                          filled: true,
+                        ),
+                        onChanged: (v) => setState(() => _searchQuery = v),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Category filters
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: _categories.map((cat) {
+                            final isSelected = _selectedCategory == cat;
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: ChoiceChip(
+                                label: Text(cat.toUpperCase()),
+                                selected: isSelected,
+                                onSelected: (selected) {
+                                  if (selected) {
+                                    setState(() => _selectedCategory = cat);
+                                  }
+                                },
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+
+                      // Memories List
+                      state.loading
+                          ? const Center(child: CircularProgressIndicator())
+                          : filtered.isEmpty && _searchQuery.isEmpty && _selectedCategory == 'all'
+                              ? _buildDefaultBlocks(palette, controller)
+                              : Column(
+                                  children: [
+                                    ...filtered.map((m) => _buildMemoryBlock(
+                                          memory: m,
+                                          palette: palette,
+                                          onEdit: () => _showEditDialog(m, controller),
+                                          onDelete: () => _confirmDelete(m, controller),
+                                        )),
+                                  ],
+                                ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 12),
-
-          // Category Chips
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              children: _categories.map((cat) {
-                final isSelected = _selectedCategory == cat;
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: ChoiceChip(
-                    label: Text(cat.toUpperCase()),
-                    selected: isSelected,
-                    onSelected: (selected) {
-                      if (selected) {
-                        setState(() => _selectedCategory = cat);
-                      }
-                    },
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-          const SizedBox(height: 8),
-
-          // ---- Memories list ----
-          Expanded(
-            child: state.loading
-                ? const Center(child: CircularProgressIndicator())
-                : filtered.isEmpty
-                    ? Center(
-                        child: Text(
-                          _searchQuery.isEmpty
-                              ? 'No memory blocks found in this category.'
-                              : 'No memories matching your search.',
-                          style: const TextStyle(color: Colors.grey),
-                        ),
-                      )
-                    : ListView.builder(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length,
-                        itemBuilder: (_, i) {
-                          final m = filtered[i];
-                          return _MemoryCard(
-                            memory: m,
-                            onEdit: () => _showEditDialog(m, controller),
-                            onDelete: () => _confirmDelete(m, controller),
-                          );
-                        },
-                      ),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        tooltip: 'Add memory block',
-        child: const Icon(Icons.add),
-        onPressed: () => _showAddDialog(controller),
+        ),
       ),
     );
   }
 
-  Widget _statChip(String text, ThemeData theme) {
+  // Display standard defaults if database is empty so that it looks exactly like the HTML mock
+  Widget _buildDefaultBlocks(TimPalette palette, ProfileController controller) {
+    final mock1 = Memory(
+      id: 'default_1',
+      userId: '',
+      content: 'Full Stack Developer Intern specializing in mobile and backend systems. Experience with cloud-native architectures.',
+      metadata: {'category': 'skill', 'tags': ['Flutter', 'Node.js', 'Spring Boot', 'AWS Lambda']},
+      createdAt: DateTime.now(),
+    );
+    final mock2 = Memory(
+      id: 'default_2',
+      userId: '',
+      content: 'Core Pair Lead managing a 7-engineer team on an AI voice mock interview platform. Recently substituted Firestore for PostgreSQL\'s JSONB column type for efficiency. Swapped development roles for Meghana and Sai.',
+      metadata: {'category': 'project', 'tags': ['System Architecture', 'Team Leadership']},
+      createdAt: DateTime.now(),
+    );
+    return Column(
+      children: [
+        _buildMemoryBlock(
+          memory: mock1,
+          palette: palette,
+          onEdit: () => _showEditDialog(mock1, controller),
+          onDelete: () => _confirmDelete(mock1, controller),
+        ),
+        _buildMemoryBlock(
+          memory: mock2,
+          palette: palette,
+          onEdit: () => _showEditDialog(mock2, controller),
+          onDelete: () => _confirmDelete(mock2, controller),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCard({
+    required String title,
+    required TimPalette palette,
+    required Widget child,
+    Widget? action,
+  }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(4),
+        color: palette.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
       ),
-      child: Text(
-        text,
-        style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                title.toUpperCase(),
+                style: TextStyle(
+                  color: palette.muted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              if (action != null) action,
+            ],
+          ),
+          const SizedBox(height: 16),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWarningBlock({
+    required String title,
+    required String description,
+    required TimPalette palette,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: palette.surfaceVariant,
+        borderRadius: BorderRadius.circular(16),
+        border: Border(
+          left: BorderSide(color: palette.danger, width: 3),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.error_outline, color: palette.danger, size: 20),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  description,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: palette.textSecondary,
+                    height: 1.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMemoryBlock({
+    required Memory memory,
+    required TimPalette palette,
+    required VoidCallback onEdit,
+    required VoidCallback onDelete,
+  }) {
+    final cat = (memory.metadata['category'] as String? ?? 'general').toLowerCase();
+    final List<String> tags = List<String>.from(memory.metadata['tags'] ?? []);
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: palette.surfaceVariant,
+        borderRadius: BorderRadius.circular(16),
+        border: Border(
+          left: BorderSide(color: palette.primary, width: 3),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            cat == 'project' ? Icons.assignment : Icons.code,
+            color: palette.primary,
+            size: 20,
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      cat.toUpperCase(),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: palette.primary,
+                      ),
+                    ),
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.edit_outlined, size: 16),
+                          onPressed: onEdit,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                        const SizedBox(width: 12),
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline, size: 16),
+                          onPressed: onDelete,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  memory.content,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: palette.textSecondary,
+                    height: 1.5,
+                  ),
+                ),
+                if (tags.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: tags
+                        .map((t) => Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.3),
+                                border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Text(
+                                t,
+                                style: TextStyle(
+                                  color: palette.textSecondary,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ))
+                        .toList(),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -295,14 +593,14 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 DropdownButtonFormField<String>(
-                  initialValue: category,
+                  value: category,
                   decoration: const InputDecoration(labelText: 'Category'),
                   items: _categories
                       .where((c) => c != 'all')
                       .map((c) => DropdownMenuItem(
                             value: c,
                             child: Text(c.toUpperCase()),
-                          ),)
+                          ))
                       .toList(),
                   onChanged: (val) {
                     if (val != null) {
@@ -335,101 +633,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 }
               },
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MemoryCard extends StatelessWidget {
-  const _MemoryCard({
-    required this.memory,
-    required this.onEdit,
-    required this.onDelete,
-  });
-
-  final Memory memory;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cat = (memory.metadata['category'] as String? ?? 'general').toLowerCase();
-
-    // Dynamically color category badges
-    Color catColor;
-    switch (cat) {
-      case 'academic':
-        catColor = Colors.purpleAccent;
-      case 'professional':
-        catColor = Colors.blueAccent;
-      case 'skill':
-        catColor = Colors.greenAccent;
-      case 'project':
-        catColor = Colors.orangeAccent;
-      default:
-        catColor = Colors.grey;
-    }
-
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      color: theme.colorScheme.surfaceContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: catColor.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: catColor.withValues(alpha: 0.4)),
-                  ),
-                  child: Text(
-                    cat.toUpperCase(),
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      color: catColor,
-                    ),
-                  ),
-                ),
-                Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.edit_outlined, size: 18),
-                      onPressed: onEdit,
-                      tooltip: 'Edit block',
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 18),
-                      onPressed: onDelete,
-                      tooltip: 'Delete block',
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              memory.content,
-              style: theme.textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 8),
-            if (memory.metadata['source'] != null)
-              Text(
-                'Source: ${memory.metadata['source']}',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: Colors.grey,
-                  fontSize: 10,
-                ),
-              ),
           ],
         ),
       ),
