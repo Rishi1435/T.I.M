@@ -113,6 +113,20 @@ downloader as before. Supabase (optional, only for encrypted sync):
 supabase db push   # applies migrations 0001 + 0002
 ```
 
+## Troubleshooting (Windows)
+
+| Symptom | Fix |
+|---|---|
+| `No file or variants found for asset: .env` during build | Fixed in v0.3.1 — the `.env` asset entry is removed from pubspec. Pull latest / apply the hotfix patch. Use `--dart-define` for config. |
+| `Building with plugins requires symlink support` | Enable **Settings → System → For developers → Developer Mode**, then `flutter clean && flutter run`. |
+| `Failed to load dynamic library 'llama.dll'` / model load crash | Run `dart run build.dart` once from `tim_project\` (or `.\windows-setup.ps1`). It downloads llama.dll (b5206, AVX2) into the build output. |
+| `Please initialize sherpa-onnx first` | Something called the audio engine before `NativeWorker.connect()` finished. Check the `ready` event before starting a call. |
+| Voice models "missing" error at startup | Expected on first run — Settings → Voice → **Download voice models** (~180 MB, SHA-256 pinned). |
+| Speech analytics shows zero words/timing | Fixed in v0.3.1 — Whisper needed `enableTokenTimestamps: true` (sherpa-onnx 1.13.x returns empty timestamps without it). |
+| `LNK1168: cannot open ...\llama.dll for writing` | A stale process or a pre-placed DLL is blocking the linker. `taskkill /F /IM tim_project.exe`, delete `build\windows\x64\runner\Debug\llama.dll`, re-run. (`windows-setup.ps1` now does this for you.) |
+| `Invalid UTF8 sequence encountered` spam during build hooks | Came from a CP-1252 em-dash inside the old `build.dart`. That file is deleted in v0.3.2. |
+| `git am` fails with "previous rebase directory .git/rebase-apply still exists" | A prior `git am` half-applied: run `git am --abort`, then re-apply. |
+
 ## TTS Directive (built-in)
 
 The seed enforces that the TTS engine **always** pronounces **Q-L-U-E** as

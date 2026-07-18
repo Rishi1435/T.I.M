@@ -55,10 +55,33 @@ class LlmEngine {
           '(ctx=$contextTokens, gpu_layers=$gpuLayers)');
       // llama_cpp_dart on Windows uses DynamicLibrary.process() by default,
       // which requires llama symbols to be linked into the exe — they aren't.
-      // Instead, tell it to use DynamicLibrary.open('llama.dll') so it loads
-      // from the DLL placed beside the exe by the build hook.
+      // Load llama.dll explicitly, searching the places it can legitimately
+      // live, and fail with an ACTIONABLE message instead of an FFI crash.
       if (Platform.isWindows) {
-        Llama.libraryPath = 'llama.dll';
+        final exeDir = File(Platform.resolvedExecutable).parent.path;
+        final candidates = <String>[
+          '$exeDir\\llama.dll',              // beside the built .exe
+          'llama.dll',                        // current working dir
+          'build\\windows\\x64\\runner\\Debug\\llama.dll',
+          'build\\windows\\x64\\runner\\Release\\llama.dll',
+        ];
+        final found = candidates.firstWhere(
+          (c) => File(c).existsSync(),
+          orElse: () => '',
+        );
+        if (found.isEmpty) {
+          throw StateError(
+            'llama.dll not found. It is compiled automatically by the '
+            'Windows build (llama_shared target in windows/runner). '
+            'Fix: close any running tim_project.exe, then\n'
+            '  flutter clean\n'
+            '  flutter run -d windows\n'
+            '(Searched: beside the exe, CWD, and '
+            'build\\windows\\x64\\runner\\{Debug,Release}.)',
+          );
+        }
+        Llama.libraryPath = found;
+        _log.info('Using llama.dll at: $found');
       }
 
       final modelParams = ModelParams()

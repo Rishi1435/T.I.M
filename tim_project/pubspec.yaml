@@ -87,5 +87,7 @@ dependency_overrides:
 
 flutter:
   uses-material-design: true
-  assets:
-    - .env
+  # NOTE: the `.env` asset entry was removed. `.env` is gitignored, so on
+  # every fresh clone `flutter build` died with "No file or variants found
+  # for asset: .env". Configuration comes from --dart-define (preferred);
+  # AppConfig already falls back gracefully.
