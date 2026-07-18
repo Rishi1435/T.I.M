@@ -71,10 +71,12 @@ class LlmEngine {
         );
         if (found.isEmpty) {
           throw StateError(
-            'llama.dll not found. Download it once with:\n'
-            '  cd tim_project\n'
-            '  dart run build.dart\n'
-            'then re-run the app. (Searched: beside the exe, CWD, and '
+            'llama.dll not found. It is compiled automatically by the '
+            'Windows build (llama_shared target in windows/runner). '
+            'Fix: close any running tim_project.exe, then\n'
+            '  flutter clean\n'
+            '  flutter run -d windows\n'
+            '(Searched: beside the exe, CWD, and '
             'build\\windows\\x64\\runner\\{Debug,Release}.)',
           );
         }
