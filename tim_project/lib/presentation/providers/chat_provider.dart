@@ -1,6 +1,6 @@
 // ============================================================
 // lib/presentation/providers/chat_provider.dart
-// Chat state. Listens to [WebSocketService] for VAD / biometric /
+// Chat state. Listens to [NativeWorker] for VAD / biometric /
 // transcription events and forwards a unified chat-message stream
 // to the UI.
 // ============================================================
@@ -17,7 +17,7 @@ import '../../core/utils/logger.dart';
 import '../../data/models/file_chip.dart';
 import '../../data/services/llm_engine.dart';
 import '../../data/services/screen_watcher.dart';
-import '../../data/services/websocket_service.dart';
+import '../../data/services/native_worker.dart';
 import 'model_provider.dart';
 import 'vault_provider.dart';
 
@@ -103,12 +103,16 @@ class ChatState {
 // Sentinel so copyWith can explicitly null out streamingMessageId.
 const Object _sentinel = Object();
 
-/// Single shared [WebSocketService] instance.
-final webSocketProvider = Provider<WebSocketService>((ref) {
-  final ws = WebSocketService();
-  ref.onDispose(ws.dispose);
-  return ws;
+/// Single shared [NativeWorker] instance (Path B: the voice
+/// pipeline runs in-process — no Python, no localhost socket).
+final timWorkerProvider = Provider<NativeWorker>((ref) {
+  final worker = NativeWorker();
+  ref.onDispose(worker.dispose);
+  return worker;
 });
+
+/// Back-compat alias for older call sites.
+final webSocketProvider = timWorkerProvider;
 
 class ChatNotifier extends StateNotifier<ChatState> {
   ChatNotifier(this._ws, this._llm, this._vaultCtrl, this._ref)
@@ -119,7 +123,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _loadHistory();
   }
 
-  final WebSocketService _ws;
+  final NativeWorker _ws;
   final LlmEngine _llm;
   final VaultController _vaultCtrl;
   final Ref _ref;

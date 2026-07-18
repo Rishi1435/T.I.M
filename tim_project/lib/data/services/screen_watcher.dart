@@ -14,12 +14,12 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import '../../core/utils/logger.dart';
-import 'websocket_service.dart';
+import 'native_worker.dart';
 
 class ScreenWatcher {
   ScreenWatcher(this._ws) : _log = Logger('ScreenWatcher');
 
-  final WebSocketService _ws;
+  final NativeWorker _ws;
   final Logger _log;
 
   /// Trigger phrases that activate screen watching.

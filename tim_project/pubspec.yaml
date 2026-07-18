@@ -6,8 +6,8 @@
 #   flutter pub get
 #   flutter run -d windows \
 #     --dart-define=SUPABASE_URL=... \
-#     --dart-define=SUPABASE_ANON_KEY=... \
-#     --dart-define=WS_URL=ws://127.0.0.1:8765
+#     --dart-define=SUPABASE_ANON_KEY=...
+# Path B: NO Python worker, NO WS_URL — voice runs in-process.
 # ============================================================
 
 name: tim_companion
@@ -31,11 +31,11 @@ dependencies:
   # ---- Supabase (auth + encrypted blob sync only — NO pgvector) ----
   supabase_flutter: ^2.0.2
 
-  # ---- WebSocket client for the local Python audio / vision / scraper worker ----
-  web_socket_channel: ^2.4.0
-
   # ---- Local AI inference (C++ via Dart FFI) ----
   llama_cpp_dart: ^0.2.2      # GGUF inference in-process
+  sherpa_onnx: ^1.11.0        # native VAD + Whisper STT + Piper TTS
+                              # + speaker verification (replaces the
+                              # entire Python audio worker)
 
   # ---- Local vault: SQLite + sqlite-vec ----
   sqlite3: ^2.4.0
@@ -43,7 +43,7 @@ dependencies:
   path_provider: ^2.1.1
   path: ^1.9.0
 
-  # ---- Cryptography (E2EE: AES-256-GCM + PBKDF2) ----
+  # ---- Cryptography (E2EE: AES-256-GCM + Argon2id KDF) ----
   cryptography: ^2.7.0
   pinenacl: ^0.6.0            # Argon2 / secretbox fallback
 
