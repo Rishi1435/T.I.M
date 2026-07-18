@@ -117,6 +117,7 @@ class AudioEngine {
       ),
       sampleRate: sampleRate,
       numThreads: 1,
+      debug: false,
     );
     _vad = sherpa.VoiceActivityDetector(
         config: vadCfg, bufferSizeInSeconds: 30);
@@ -127,10 +128,15 @@ class AudioEngine {
         whisper: sherpa.OfflineWhisperModelConfig(
           encoder: cfg.whisperEncoderPath,
           decoder: cfg.whisperDecoderPath,
+          // Without this flag sherpa-onnx 1.13.x returns EMPTY
+          // timestamps and SpeechAnalytics silently sees no timing.
+          // (Verified against the 1.13.4 package source.)
+          enableTokenTimestamps: true,
         ),
         tokens: cfg.whisperTokensPath,
         numThreads: math.max(2, Platform.numberOfProcessors ~/ 2),
         modelType: 'whisper',
+        debug: false,
       ),
     );
     _asr = sherpa.OfflineRecognizer(asrCfg);
@@ -144,6 +150,7 @@ class AudioEngine {
           dataDir: cfg.ttsDataDir,
         ),
         numThreads: 2,
+        debug: false,
       ),
     );
     _tts = sherpa.OfflineTts(ttsCfg);
