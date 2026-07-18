@@ -113,6 +113,24 @@ downloader as before. Supabase (optional, only for encrypted sync):
 supabase db push   # applies migrations 0001 + 0002
 ```
 
+## v0.3.3 fixes (from the screen recordings)
+
+- **`<|eot_id|` no longer leaks into replies** — the token streamer now
+  holds back any text that could still become a stop marker and emits
+  only provably-safe text (plus a final sanitizer pass before persist).
+- **Duplicate "hi" bubbles fixed** — a synchronous in-flight guard
+  closes the double-Enter race that existed before `isGenerating` was
+  set (there were async RAG awaits in between).
+- **T.I.M. no longer scolds greetings** — system prompt reworked: a
+  greeting gets one friendly line and "what do you want to work on",
+  not a lecture about providing context. Persona stays direct.
+- **Voice models auto-download on first launch** — no hidden settings
+  step; progress streams into chat ("Downloading voice engine: … %").
+  Downloads are resumable and SHA-256 pinned.
+- **Stop button also cancels voice-call generations**, and generation
+  uses a physical-core thread count (faster on hybrid CPUs, keeps the
+  UI responsive).
+
 ## Troubleshooting (Windows)
 
 | Symptom | Fix |

@@ -139,6 +139,19 @@ class ChatNotifier extends StateNotifier<ChatState> {
   /// Set to true when the user presses Stop to cancel an in-flight generation.
   bool _cancelRequested = false;
 
+  /// Synchronous in-flight guard. `state.isGenerating` is only set after
+  /// async RAG work, leaving a race window where a double-Enter sent the
+  /// same message twice (the duplicated "hi" bubbles). This flag is set
+  /// before the first await and closes that window.
+  bool _sendBusy = false;
+
+  /// Strip chat-template control tokens that a model may echo
+  /// (e.g. a leaked `<|eot_id|` fragment) before persisting/rendering.
+  static String _stripSpecialTokens(String text) => text
+      .replaceAll(RegExp(r'<\|[A-Za-z0-9_]+\|>'), '')
+      .replaceAll(RegExp(r'<\|[A-Za-z0-9_]*\|?>?\s*$'), '')
+      .trimRight();
+
   /// Called by the UI Stop button to abort streaming.
   void stopGeneration() {
     _cancelRequested = true;
@@ -147,6 +160,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void _runLlmForVoice(String text) async {
+    if (_sendBusy) return;
+    _sendBusy = true;
+    _cancelRequested = false;
     // Re-use logic from sendText to query local LLM
     String ragContext = '';
     final vault = _vaultCtrl.vault;
@@ -173,12 +189,19 @@ class ChatNotifier extends StateNotifier<ChatState> {
     var response = '';
     try {
       await for (final token in _llm.generate(prompt, stop: stopSeqs)) {
+        if (_cancelRequested) break;
         response += token;
         // update UI
         state = state.copyWith(
           messages: state.messages.map((m) => m.id == aiMsgId ? m.copyWith(text: response) : m).toList(),
         );
       }
+      response = _stripSpecialTokens(response);
+      state = state.copyWith(
+        messages: state.messages
+            .map((m) => m.id == aiMsgId ? m.copyWith(text: response) : m)
+            .toList(),
+      );
       // Done streaming. Persist response and user message to DB safely.
       if (vault != null) {
         try {
@@ -211,6 +234,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     } catch (e) {
       _addSystem('AI reply generation failed: $e');
     } finally {
+      _sendBusy = false;
       state = state.copyWith(isGenerating: false, streamingMessageId: null);
     }
   }
@@ -314,13 +338,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
     String ragContext,
   ) {
     const systemInstruction =
-        'Context: You are T.I.M. (This Is Me), a blunt, hyper-observant career and behavioral mentor running locally on a secure Windows system.\n'
-        'Request: Analyze the user\'s input, cross-reference their encrypted timeline, and provide brutal, constructive feedback.\n'
-        'Explanation: You do not write code for the user. You do not validate excuses. Your goal is to force the user to confront logical flaws and communication gaps. '
-        'If the user\'s memory profile/timeline is empty, guide them to complete the "Genesis Onboarding" so you can learn their story.\n'
-        'Action: Respond with direct, concise critiques. If the user makes a mistake, log a high-priority rule for future sessions.\n'
-        'Tone: Demanding, analytical, and strictly professional. No pleasantries. No emojis.\n'
-        'Extras: Always end by asking a probing question that forces the user to defend their reasoning.';
+        'You are T.I.M. (This Is Me), a direct, hyper-observant career and communication mentor running fully offline on the user\'s own PC.\n'
+        'Core behavior:\n'
+        '- Be concise, specific, and honest. Push back on weak reasoning, but never scold the user for how they opened the conversation.\n'
+        '- If the user greets you (e.g. "hi"), greet them back in ONE short sentence and ask what they want to work on today. Do not lecture them about providing context.\n'
+        '- You coach; you do not do the work for them. Guide them to fix their own code, answers, and communication.\n'
+        '- If their memory profile is empty, mention Genesis Onboarding at most once, briefly, then work with whatever they give you.\n'
+        '- Use the retrieved memory context when relevant; never invent facts about the user.\n'
+        '- When you spot a real weakness, name it plainly and give one concrete improvement step.\n'
+        '- End substantive answers (not greetings) with ONE focused follow-up question.\n'
+        'Tone: professional, warm-but-firm, no emojis, no filler.';
 
     final contextPart =
         ragContext.isNotEmpty ? 'Context:\n$ragContext\n' : '';
@@ -443,6 +470,25 @@ class ChatNotifier extends StateNotifier<ChatState> {
         if (rule.isNotEmpty) {
           _addMessage(MessageSender.system, 'Reflexion rule learned: $rule');
         }
+      case WsEventType.modelDownload:
+        final id = e.payload['id'] as String? ?? 'model';
+        final pct = e.payload['pct'] as int? ?? 0;
+        final done = e.payload['done'] as bool? ?? false;
+        const dlMsgId = 'voice-model-download';
+        final txt = done
+            ? 'Voice engine ready — all models installed.'
+            : 'Downloading voice engine: $id — $pct%';
+        final exists = state.messages.any((m) => m.id == dlMsgId);
+        if (exists) {
+          state = state.copyWith(
+            messages: state.messages
+                .map((m) => m.id == dlMsgId ? m.copyWith(text: txt) : m)
+                .toList(),
+          );
+        } else {
+          _addMessage(MessageSender.system, txt,
+              id: dlMsgId, persist: false);
+        }
       case WsEventType.error:
         state = state.copyWith(voice: VoiceState.idle);
     }
@@ -529,8 +575,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
   /// Local text-send path (when not using voice).
   void sendText(String text) async {
     if (text.trim().isEmpty && state.pendingChips.isEmpty) return;
-    // Don't allow sending while already generating.
-    if (state.isGenerating) return;
+    // Don't allow sending while already generating (sync guard closes
+    // the double-Enter race; state flag covers everything else).
+    if (_sendBusy || state.isGenerating) return;
+    _sendBusy = true;
 
     final attachments = state.pendingChips;
     final userMsgId = DateTime.now().microsecondsSinceEpoch.toString();
@@ -540,6 +588,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     if (!_llm.isLoaded) {
       _addSystem('Local model not loaded. Please download/load a model from the top bar.');
+      _sendBusy = false;
       return;
     }
 
@@ -635,7 +684,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       }
 
       // Final UI flush (in case last batch < _uiUpdateEveryN tokens).
-      var finalText = responseText;
+      var finalText = _stripSpecialTokens(responseText);
       for (final seq in stopSeqs) {
         final idx = finalText.toLowerCase().indexOf(seq.toLowerCase());
         if (idx != -1) finalText = finalText.substring(0, idx);
@@ -722,6 +771,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         }
       }
     } finally {
+      _sendBusy = false;
       state = state.copyWith(
         isGenerating: false,
         streamingMessageId: null,

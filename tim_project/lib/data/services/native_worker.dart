@@ -106,12 +106,37 @@ class NativeWorker {
       _catalog = VoiceModelsCatalog(baseDir: voiceDir);
 
       if (!await _catalog!.allInstalled) {
-        _emit(WsEventType.error, {
-          'message': 'voice_models_missing',
-          'detail': 'Voice models are not downloaded yet. '
-              'Call NativeWorker.downloadModels() (Settings → Voice).',
-        });
-        return;
+        // No dedicated settings UI exists for this yet, so the worker
+        // self-provisions: download the ~180 MB voice bundle on first
+        // launch, streaming progress into chat via modelDownload events.
+        _emit(WsEventType.modelDownload,
+            {'id': 'voice engine', 'pct': 0, 'done': false});
+        var lastPct = -1;
+        try {
+          await _catalog!.ensureAll(onProgress: (id, received, total) {
+            if (total <= 0) return;
+            final pct = (received * 100 ~/ total);
+            if (pct != lastPct && pct % 2 == 0) {
+              lastPct = pct;
+              _emit(WsEventType.modelDownload, {
+                'id': id,
+                'pct': pct,
+                'received': received,
+                'total': total,
+                'done': false,
+              });
+            }
+          });
+          _emit(WsEventType.modelDownload,
+              {'id': 'voice engine', 'pct': 100, 'done': true});
+        } catch (e) {
+          _emit(WsEventType.error, {
+            'message': 'voice_model_download_failed',
+            'detail': '$e — check your connection and restart the app '
+                'to resume (downloads are resumable).',
+          });
+          return;
+        }
       }
 
       await _engine.init(_catalog!.resolveEngineConfig());
