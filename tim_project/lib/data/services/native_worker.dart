@@ -125,7 +125,7 @@ class NativeWorker {
       });
       if (!_gate!.isEnrolled) {
         _emit(WsEventType.biometric,
-            {'verified': true, 'mode': 'open', 'enrolled': false});
+            {'verified': true, 'mode': 'open', 'enrolled': false},);
       }
     } catch (e, s) {
       _log.warn('connect failed: $e\n$s');
@@ -136,7 +136,7 @@ class NativeWorker {
   /// One-time voice-model download with progress callbacks
   /// (Settings screen calls this; ~180 MB total).
   Future<void> downloadModels(
-      {void Function(String id, int received, int total)? onProgress}) async {
+      {void Function(String id, int received, int total)? onProgress,}) async {
     final support = await getApplicationSupportDirectory();
     _catalog ??=
         VoiceModelsCatalog(baseDir: p.join(support.path, 'voice_models'));
@@ -203,7 +203,7 @@ class NativeWorker {
 
   bool _detectEnergy(Float32List samples) {
     var e = 0.0;
-    for (final v in samples) e += v * v;
+    for (final v in samples) { e += v * v; }
     return (e / samples.length) > 0.003; // ~-25 dBFS gate
   }
 
@@ -223,8 +223,8 @@ class NativeWorker {
       case BargeInVerdict.notOwner:
         _bargeInPaused = false;
         _emit(WsEventType.biometric, {'verified': false});
-        // chat_provider shows "Non-owner voice — barge-in blocked."
-        // and playback resumes on the next ttsChunk.
+      // chat_provider shows "Non-owner voice — barge-in blocked."
+      // and playback resumes on the next ttsChunk.
     }
   }
 
@@ -245,14 +245,14 @@ class NativeWorker {
       for (final w in res.words) {
         final s = (w.startMs * AudioEngine.sampleRate ~/ 1000)
             .clamp(0, seg.length - 1);
-        final e = (w.endMs * AudioEngine.sampleRate ~/ 1000)
-            .clamp(s + 1, seg.length);
+        final e =
+            (w.endMs * AudioEngine.sampleRate ~/ 1000).clamp(s + 1, seg.length);
         frames.add({
           'word': w.word,
           'start_ms': w.startMs,
           'end_ms': w.endMs,
-          'pitch_hz': AudioEngine.estimatePitchHz(
-              Float32List.sublistView(seg, s, e)),
+          'pitch_hz':
+              AudioEngine.estimatePitchHz(Float32List.sublistView(seg, s, e)),
         });
       }
       _emit(WsEventType.speechAnalytics, {'frames': frames});
@@ -277,7 +277,7 @@ class NativeWorker {
         unawaited(_runVideoPipeline(
           obj['path'] as String? ?? '',
           (obj['frame_interval_sec'] as num?)?.toInt() ?? 3,
-        ));
+        ),);
       case 'voice_enroll_start':
         _enrolling = true;
         _enrollBuffer.clear();
@@ -335,12 +335,12 @@ class NativeWorker {
   Future<void> _runScreenVision(Uint8List png, String prompt) async {
     if (_vision != null) {
       try {
-        final analysis = await _vision.describeImage(png, prompt);
+        final analysis = await _vision?.describeImage(png, prompt);
         _emit(WsEventType.screenVision, {'analysis': analysis});
         return;
       } catch (e) {
         _emit(WsEventType.screenVision,
-            {'analysis': '<vision engine error: $e>'});
+            {'analysis': '<vision engine error: $e>'},);
         return;
       }
     }
@@ -372,14 +372,19 @@ class NativeWorker {
         return;
       }
       final outDir = Directory(p.join(support.path, 'video_frames',
-          DateTime.now().millisecondsSinceEpoch.toString()))
+          DateTime.now().millisecondsSinceEpoch.toString(),),)
         ..createSync(recursive: true);
       final result = await Process.run(ffmpeg, [
-        '-i', mp4Path,
-        '-vf', 'fps=1/$intervalSec,scale=640:-1',
-        '-q:v', '5',
+        '-i',
+        mp4Path,
+        '-vf',
+        'fps=1/$intervalSec,scale=640:-1',
+        '-q:v',
+        '5',
         p.join(outDir.path, 'frame_%04d.jpg'),
-        '-hide_banner', '-loglevel', 'error',
+        '-hide_banner',
+        '-loglevel',
+        'error',
       ]);
       if (result.exitCode != 0) {
         throw ProcessException(ffmpeg, const [], '${result.stderr}');
@@ -394,8 +399,7 @@ class NativeWorker {
         'kind': 'video_summary',
         'frame_count': frames,
         'duration_sec': durationSec,
-        'slide_pace_sec_per_slide':
-            frames == 0 ? 0 : durationSec / frames,
+        'slide_pace_sec_per_slide': frames == 0 ? 0 : durationSec / frames,
         'summary': 'Extracted $frames frames (${intervalSec}s apart). '
             'Visual slide critique pends the vision runtime; pacing '
             'stats are real.',
@@ -430,22 +434,22 @@ class NativeWorker {
     final embs = <Float32List>[];
     for (var i = 0; i < 3; i++) {
       final e = await _engine.speakerEmbedding(
-          Float32List.sublistView(clip, i * third, (i + 1) * third));
+          Float32List.sublistView(clip, i * third, (i + 1) * third),);
       if (e != null) embs.add(e);
     }
     if (embs.isEmpty) {
       _emit(WsEventType.biometric,
-          {'verified': false, 'enrolled': false, 'message': 'Enroll failed'});
+          {'verified': false, 'enrolled': false, 'message': 'Enroll failed'},);
       return;
     }
     final dim = embs.first.length;
     final mean = Float32List(dim);
     for (final e in embs) {
-      for (var i = 0; i < dim; i++) mean[i] += e[i] / embs.length;
+      for (var i = 0; i < dim; i++) { mean[i] += e[i] / embs.length; }
     }
     await _gate!.enroll(mean);
     _emit(WsEventType.biometric,
-        {'verified': true, 'enrolled': true, 'mode': 'biometric'});
+        {'verified': true, 'enrolled': true, 'mode': 'biometric'},);
   }
 
   void dispose() {
