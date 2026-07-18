@@ -46,6 +46,7 @@ class AppConfig {
   }
 
   /// WebSocket URL of the local Python audio / vision / scraper worker.
+  @Deprecated('Path B: no local worker socket exists any more.')
   static String get wsUrl =>
       const String.fromEnvironment('WS_URL').isNotEmpty
           ? const String.fromEnvironment('WS_URL')
