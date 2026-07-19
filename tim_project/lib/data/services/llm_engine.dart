@@ -94,6 +94,13 @@ class LlmEngine {
         // and keeps the UI thread responsive during generation.
         ..nThreads = (Platform.numberOfProcessors ~/ 2) < 2
             ? 2
+            : Platform.numberOfProcessors ~/ 2
+        // v0.4.1 — nThreadsBatch governs PREFILL (prompt processing),
+        // which is exactly the 'thirty seconds for hi' phase. It
+        // defaulted to 8 regardless of hardware; on a 20-logical-core
+        // machine prefill was leaving half the CPU idle.
+        ..nThreadsBatch = (Platform.numberOfProcessors ~/ 2) < 2
+            ? 2
             : Platform.numberOfProcessors ~/ 2;
 
       final loadCommand = LlamaLoad(

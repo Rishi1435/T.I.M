@@ -355,6 +355,18 @@ class NativeWorker {
         // T.I.M. transcribe its own voice as the user (the duplicated
         // 'Got it. What specifically…' bubbles).
         _clientPlaybackActive = obj['active'] == true;
+        if (!_clientPlaybackActive) {
+          // v0.4.1 — turn boundary: T.I.M. just finished speaking.
+          // Reset every per-turn buffer so turn 2 starts pristine:
+          // any VAD residue of our own tail audio, half-accumulated
+          // barge-in samples, and the pause flag all go. The mic
+          // stream itself stays live — this is state hygiene, not a
+          // pipeline teardown.
+          _engine.vadReset();
+          _bargeInBuffer.clear();
+          _bargeInPaused = false;
+          _speechOpen = false;
+        }
       case 'screen_vision':
         _pendingVisionPrompt = obj['prompt'] as String? ?? '';
       case 'video_pipeline':
