@@ -15,7 +15,7 @@ class AppSettings {
   const AppSettings({
     this.hardwareProfiling = true,
     this.voiceLock = true,
-    this.cadenceCoaching = true,
+    this.cadenceCoaching = false,
     this.openFreshSessionOnLaunch = true,
     this.loaded = false,
   });
@@ -58,7 +58,7 @@ class AppSettingsNotifier extends StateNotifier<AppSettings> {
     state = AppSettings(
       hardwareProfiling: p.getBool(_kHw) ?? true,
       voiceLock: p.getBool(_kVoiceLock) ?? true,
-      cadenceCoaching: p.getBool(_kCadence) ?? true,
+      cadenceCoaching: p.getBool(_kCadence) ?? false,
       openFreshSessionOnLaunch: p.getBool(_kFresh) ?? true,
       loaded: true,
     );

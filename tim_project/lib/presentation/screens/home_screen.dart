@@ -492,8 +492,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
           const SizedBox(height: 12),
           Text(
-            'T.I.M. can capture and analyze your active display workspace.',
-            style: TextStyle(color: palette.muted, fontSize: 14),
+            'Screen sharing is passive: T.I.M. snapshots your screen only '
+            'at the moment you ask. Say or type "look at my screen…" with '
+            'your question — from chat or during a Live Call — and it '
+            'reads what you\'re working on right then.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: palette.muted, fontSize: 14, height: 1.5),
           ),
           const SizedBox(height: 32),
           ElevatedButton.icon(
@@ -570,7 +574,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     id: DateTime.now().microsecondsSinceEpoch.toString() +
                         f.name,
                     name: f.name,
-                    kind: 'file',
+                    kind: FileChip.inferKind(f.name),
                     sizeBytes: len,
                     localUri: f.path,
                   ));
@@ -581,7 +585,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   chatCtrl.addFileChip(FileChip(
                     id: DateTime.now().microsecondsSinceEpoch.toString(),
                     name: dir.split(Platform.pathSeparator).last,
-                    kind: 'folder',
+                    kind: FileChipKind.unknown,
                     sizeBytes: 0,
                     localUri: dir,
                   ));
@@ -785,7 +789,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ref.read(chatProvider.notifier).addFileChip(FileChip(
                       id: DateTime.now().microsecondsSinceEpoch.toString(),
                       name: v.length > 24 ? '${v.substring(0, 21)}…' : v,
-                      kind: 'context',
+                      kind: FileChipKind.text,
                       sizeBytes: v.length,
                       localUri: '',
                       metadata: {'text': v},

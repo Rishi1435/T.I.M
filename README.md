@@ -113,6 +113,24 @@ downloader as before. Supabase (optional, only for encrypted sync):
 supabase db push   # applies migrations 0001 + 0002
 ```
 
+## v0.3.5 fixes
+
+- **Build fix**: `FileChip.kind` takes the `FileChipKind` enum, not a
+  string — the v0.3.4 attach-menu call sites now use
+  `FileChip.inferKind()` / proper enum values.
+- **Live Call is a conversation first**: speaking-pace coaching
+  ("you are speaking too fast") is now **off by default**, only fires
+  when enabled in settings, and never on short utterances (Whisper
+  timing over a few words produces garbage wpm). Talk to T.I.M. like
+  Gemini Live; flip on coaching only when you want drill mode.
+- **Sign-in and registration are distinct journeys**: registration
+  collects your name (used across the app), explains that the password
+  encrypts your vault, and adds confirm-password; headlines, CTAs, and
+  fields differ per mode with animated transitions.
+- **Screen Share page copy** now explains the passive concept: T.I.M.
+  snapshots only at the moment you ask "look at my screen…" — from
+  chat or mid-call.
+
 ## v0.3.4 fixes (from the narrated recording — transcribed with the same
 ## Whisper engine that ships in the app)
 

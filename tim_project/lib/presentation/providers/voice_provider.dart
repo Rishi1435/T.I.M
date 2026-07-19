@@ -16,6 +16,7 @@ import 'package:record/record.dart';
 
 import '../../data/services/speech_analytics.dart';
 import '../../data/services/native_worker.dart';
+import 'app_settings_provider.dart';
 import 'chat_provider.dart';
 
 @immutable
@@ -55,7 +56,7 @@ class VoiceCallState {
 }
 
 class VoiceCallController extends StateNotifier<VoiceCallState> {
-  VoiceCallController(this._ws, this._analytics)
+  VoiceCallController(this._ws, this._analytics, this._ref)
       : super(const VoiceCallState()) {
     _sub = _ws.events
         .where((e) => e.type == WsEventType.speechAnalytics)
@@ -65,6 +66,7 @@ class VoiceCallController extends StateNotifier<VoiceCallState> {
 
   final NativeWorker _ws;
   final SpeechAnalytics _analytics;
+  final Ref _ref;
   late final StreamSubscription<WsEvent> _sub;
   late final Timer _timer;
   // Rolling RMS window driving the real waveform (no more Random()).
@@ -120,7 +122,16 @@ class VoiceCallController extends StateNotifier<VoiceCallState> {
             ),)
         .toList();
     final report = _analytics.analyse(frames);
-    final msg = _analytics.interruptionMessage(report);
+    // v0.3.5 — Live Call is a natural conversation first (Gemini
+    // Live style), not a drill sergeant. Coaching interruptions:
+    //   * only when "Speaking-pace coaching" is ON in settings
+    //     (now OFF by default),
+    //   * never for short utterances (Whisper timing on a few words
+    //     produces garbage wpm → false "too fast" flags).
+    final coachingOn = _ref.read(appSettingsProvider).cadenceCoaching;
+    final msg = (coachingOn && frames.length >= 8)
+        ? _analytics.interruptionMessage(report)
+        : null;
     state = state.copyWith(
       lastReport: report,
       interruptionMessage: msg,
@@ -173,6 +184,6 @@ final voiceCallProvider =
   (ref) {
     final ws = ref.watch(webSocketProvider);
     final analytics = ref.watch(speechAnalyticsProvider);
-    return VoiceCallController(ws, analytics);
+    return VoiceCallController(ws, analytics, ref);
   },
 );

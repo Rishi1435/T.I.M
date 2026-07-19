@@ -78,11 +78,16 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
-  Future<void> signUp(String email, String password) async {
+  Future<void> signUp(String email, String password, {String? name}) async {
     state = const AuthLoading();
     try {
-      await SupabaseService.client.auth
-          .signUp(email: email, password: password);
+      await SupabaseService.client.auth.signUp(
+        email: email,
+        password: password,
+        data: name != null && name.trim().isNotEmpty
+            ? {'display_name': name.trim()}
+            : null,
+      );
       // Automatically unlock the local vault with the signup password
       await ref.read(vaultProvider.notifier).unlock(password);
     } on AuthException catch (e) {
