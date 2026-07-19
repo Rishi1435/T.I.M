@@ -55,10 +55,33 @@ class LlmEngine {
           '(ctx=$contextTokens, gpu_layers=$gpuLayers)');
       // llama_cpp_dart on Windows uses DynamicLibrary.process() by default,
       // which requires llama symbols to be linked into the exe — they aren't.
-      // Instead, tell it to use DynamicLibrary.open('llama.dll') so it loads
-      // from the DLL placed beside the exe by the build hook.
+      // Load llama.dll explicitly, searching the places it can legitimately
+      // live, and fail with an ACTIONABLE message instead of an FFI crash.
       if (Platform.isWindows) {
-        Llama.libraryPath = 'llama.dll';
+        final exeDir = File(Platform.resolvedExecutable).parent.path;
+        final candidates = <String>[
+          '$exeDir\\llama.dll',              // beside the built .exe
+          'llama.dll',                        // current working dir
+          'build\\windows\\x64\\runner\\Debug\\llama.dll',
+          'build\\windows\\x64\\runner\\Release\\llama.dll',
+        ];
+        final found = candidates.firstWhere(
+          (c) => File(c).existsSync(),
+          orElse: () => '',
+        );
+        if (found.isEmpty) {
+          throw StateError(
+            'llama.dll not found. It is compiled automatically by the '
+            'Windows build (llama_shared target in windows/runner). '
+            'Fix: close any running tim_project.exe, then\n'
+            '  flutter clean\n'
+            '  flutter run -d windows\n'
+            '(Searched: beside the exe, CWD, and '
+            'build\\windows\\x64\\runner\\{Debug,Release}.)',
+          );
+        }
+        Llama.libraryPath = found;
+        _log.info('Using llama.dll at: $found');
       }
 
       final modelParams = ModelParams()
@@ -66,7 +89,12 @@ class LlmEngine {
         ..mainGpu = -1;
       final contextParams = ContextParams()
         ..nCtx = contextTokens
-        ..nThreads = Platform.numberOfProcessors;
+        // Logical-core count oversubscribes llama.cpp on hybrid CPUs
+        // (P+E cores, hyperthreading). Physical-core estimate is faster
+        // and keeps the UI thread responsive during generation.
+        ..nThreads = (Platform.numberOfProcessors ~/ 2) < 2
+            ? 2
+            : Platform.numberOfProcessors ~/ 2;
 
       final loadCommand = LlamaLoad(
         path: ggufPath,
@@ -151,37 +179,74 @@ class LlmEngine {
       // Send prompt to background isolate using the isolated scope
       await scope.sendPrompt(prompt);
 
+      // ---- Stop-sequence HOLDBACK buffer ------------------------
+      // The old loop checked stop markers only after tokens were
+      // already yielded, so multi-token markers like <|eot_id|> leaked
+      // into the chat UI as "<|eot_id|". We now hold back any tail of
+      // the pending text that could still grow into a stop marker and
+      // only emit text that provably cannot be part of one.
+      final stopLower = stop.map((s) => s.toLowerCase()).toList();
       var produced = 0;
-      var accumulated = '';
+      var pending = '';
+
+      int holdbackLen(String lcPending) {
+        var hold = 0;
+        for (final seq in stopLower) {
+          final maxK = seq.length - 1;
+          final limit = maxK < lcPending.length ? maxK : lcPending.length;
+          for (var k = limit; k > 0; k--) {
+            if (lcPending.endsWith(seq.substring(0, k))) {
+              if (k > hold) hold = k;
+              break;
+            }
+          }
+        }
+        return hold;
+      }
+
       await for (final token in controller.stream) {
         if (_cancelled) break;
         produced++;
-        accumulated += token;
+        pending += token;
+        final lc = pending.toLowerCase();
 
-        bool shouldStop = false;
+        // Full stop marker present → emit only what precedes it, stop.
+        var stopIdx = -1;
         String stopSeqFound = '';
-        for (final seq in stop) {
-          if (accumulated.toLowerCase().contains(seq.toLowerCase())) {
-            shouldStop = true;
+        for (final seq in stopLower) {
+          final idx = lc.indexOf(seq);
+          if (idx != -1 && (stopIdx == -1 || idx < stopIdx)) {
+            stopIdx = idx;
             stopSeqFound = seq;
-            break;
           }
         }
-
-        if (shouldStop) {
+        if (stopIdx != -1) {
+          final safe = pending.substring(0, stopIdx);
+          if (safe.isNotEmpty) yield safe;
           _log.info(
               'Stop sequence "$stopSeqFound" detected; stopping generation.');
           await scope.stop();
+          pending = '';
           break;
         }
 
-        yield token;
+        // Otherwise emit everything except a tail that might still
+        // become a stop marker.
+        final hold = holdbackLen(lc);
+        if (pending.length > hold) {
+          yield pending.substring(0, pending.length - hold);
+          pending = pending.substring(pending.length - hold);
+        }
 
         if (produced >= maxTokens) {
           _log.warn('Hit maxTokens=$maxTokens; stopping generation.');
           await scope.stop();
           break;
         }
+      }
+      // Stream ended without a stop marker: flush the held-back tail.
+      if (!_cancelled && pending.isNotEmpty) {
+        yield pending;
       }
     } finally {
       await sub.cancel();

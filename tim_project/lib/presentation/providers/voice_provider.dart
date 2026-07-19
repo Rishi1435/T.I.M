@@ -8,13 +8,15 @@
 
 import 'dart:async';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:record/record.dart';
 
 import '../../data/services/speech_analytics.dart';
-import '../../data/services/websocket_service.dart';
+import '../../data/services/native_worker.dart';
+import 'app_settings_provider.dart';
 import 'chat_provider.dart';
 
 @immutable
@@ -54,7 +56,7 @@ class VoiceCallState {
 }
 
 class VoiceCallController extends StateNotifier<VoiceCallState> {
-  VoiceCallController(this._ws, this._analytics)
+  VoiceCallController(this._ws, this._analytics, this._ref)
       : super(const VoiceCallState()) {
     _sub = _ws.events
         .where((e) => e.type == WsEventType.speechAnalytics)
@@ -62,11 +64,15 @@ class VoiceCallController extends StateNotifier<VoiceCallState> {
     _timer = Timer.periodic(const Duration(milliseconds: 50), _tick);
   }
 
-  final WebSocketService _ws;
+  final NativeWorker _ws;
   final SpeechAnalytics _analytics;
+  final Ref _ref;
   late final StreamSubscription<WsEvent> _sub;
   late final Timer _timer;
-  final _rng = Random();
+  // Rolling RMS window driving the real waveform (no more Random()).
+  final List<double> _levels = List<double>.filled(48, 0.0, growable: false);
+  int _levelIdx = 0;
+  double _lastDb = 0.0;
 
   final _recorder = AudioRecorder();
   StreamSubscription<Uint8List>? _recordSub;
@@ -91,6 +97,7 @@ class VoiceCallController extends StateNotifier<VoiceCallState> {
 
       _recordSub = recordStream.listen((data) {
         _ws.sendAudio(data);
+        _ingestPcm(data);
       });
     } catch (e) {
       state = state.copyWith(active: false, error: 'Failed to start recording: $e');
@@ -115,21 +122,48 @@ class VoiceCallController extends StateNotifier<VoiceCallState> {
             ),)
         .toList();
     final report = _analytics.analyse(frames);
-    final msg = _analytics.interruptionMessage(report);
+    // v0.3.5 — Live Call is a natural conversation first (Gemini
+    // Live style), not a drill sergeant. Coaching interruptions:
+    //   * only when "Speaking-pace coaching" is ON in settings
+    //     (now OFF by default),
+    //   * never for short utterances (Whisper timing on a few words
+    //     produces garbage wpm → false "too fast" flags).
+    final coachingOn = _ref.read(appSettingsProvider).cadenceCoaching;
+    final msg = (coachingOn && frames.length >= 8)
+        ? _analytics.interruptionMessage(report)
+        : null;
     state = state.copyWith(
       lastReport: report,
       interruptionMessage: msg,
     );
   }
 
-  /// 20Hz ticker that drives the waveform animation. In production
-  /// the decibel value comes from the mic capture stream; here we
-  /// synthesise a plausible wave so the UI can be demoed offline.
+  /// Compute RMS of each mic chunk (16-bit LE PCM) and push it into
+  /// the rolling waveform buffer. This is the REAL signal now.
+  void _ingestPcm(Uint8List pcm) {
+    final bd = ByteData.sublistView(pcm);
+    final n = pcm.length ~/ 2;
+    if (n == 0) return;
+    var sum = 0.0;
+    for (var i = 0; i < n; i++) {
+      final v = bd.getInt16(i * 2, Endian.little) / 32768.0;
+      sum += v * v;
+    }
+    final rms = sqrt(sum / n);
+    // Perceptual-ish scaling: mic speech RMS ~0.02-0.3 → 0..1.
+    _lastDb = (rms * 4.0).clamp(0.0, 1.0);
+    _levels[_levelIdx] = _lastDb;
+    _levelIdx = (_levelIdx + 1) % _levels.length;
+  }
+
+  /// 20Hz ticker publishing the rolling mic levels to the UI.
   void _tick(Timer t) {
     if (!state.active) return;
-    final db = 0.3 + _rng.nextDouble() * 0.7;
-    final wave = List<double>.generate(48, (_) => _rng.nextDouble());
-    state = state.copyWith(decibel: db, waveform: wave);
+    final wave = <double>[
+      for (var i = 0; i < _levels.length; i++)
+        _levels[(_levelIdx + i) % _levels.length],
+    ];
+    state = state.copyWith(decibel: _lastDb, waveform: wave);
   }
 
   @override
@@ -150,6 +184,6 @@ final voiceCallProvider =
   (ref) {
     final ws = ref.watch(webSocketProvider);
     final analytics = ref.watch(speechAnalyticsProvider);
-    return VoiceCallController(ws, analytics);
+    return VoiceCallController(ws, analytics, ref);
   },
 );

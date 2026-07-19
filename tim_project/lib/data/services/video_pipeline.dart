@@ -16,7 +16,7 @@
 import 'dart:async';
 
 import '../../core/utils/logger.dart';
-import 'websocket_service.dart';
+import 'native_worker.dart';
 
 class VideoCoachReport {
   VideoCoachReport({
@@ -34,7 +34,7 @@ class VideoCoachReport {
 class VideoPipeline {
   VideoPipeline(this._ws) : _log = Logger('VideoPipeline');
 
-  final WebSocketService _ws;
+  final NativeWorker _ws;
   final Logger _log;
 
   /// Request frame extraction + analysis for a local MP4.

@@ -323,6 +323,14 @@ class LocalVault {
         .toList();
   }
 
+  /// Rename a session/workspace (v0.3.4 auto-titling).
+  void renameWorkspace(String oldName, String newName) {
+    if (_db == null || oldName == newName || newName.trim().isEmpty) return;
+    _db!
+        .prepare('UPDATE chat_messages SET workspace = ? WHERE workspace = ?')
+        .execute([newName, oldName]);
+  }
+
   /// Load list of all unique workspaces in database.
   List<String> getWorkspaces() {
     if (_db == null) return const [];
