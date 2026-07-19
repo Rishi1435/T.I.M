@@ -56,6 +56,8 @@ dependencies:
   uuid: ^4.2.1
   intl: ^0.18.1
   shared_preferences: ^2.2.2
+  file_selector: ^1.0.3       # v0.3.4: real Upload files / Add folder
+                              # pickers for the chat attach menu
   flutter_dotenv: ^5.1.0
   collection: ^1.18.0
   desktop_drop: ^0.4.4        # drag-and-drop file zone

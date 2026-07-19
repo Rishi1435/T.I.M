@@ -23,6 +23,8 @@ enum WsEventType {
   error,
   closed,
   interrupt,
+  /// Voice-model auto-download progress: {id, pct, received, total, done}.
+  modelDownload,
 }
 
 class WsEvent {

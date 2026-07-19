@@ -113,6 +113,65 @@ downloader as before. Supabase (optional, only for encrypted sync):
 supabase db push   # applies migrations 0001 + 0002
 ```
 
+## v0.3.5 fixes
+
+- **Build fix**: `FileChip.kind` takes the `FileChipKind` enum, not a
+  string — the v0.3.4 attach-menu call sites now use
+  `FileChip.inferKind()` / proper enum values.
+- **Live Call is a conversation first**: speaking-pace coaching
+  ("you are speaking too fast") is now **off by default**, only fires
+  when enabled in settings, and never on short utterances (Whisper
+  timing over a few words produces garbage wpm). Talk to T.I.M. like
+  Gemini Live; flip on coaching only when you want drill mode.
+- **Sign-in and registration are distinct journeys**: registration
+  collects your name (used across the app), explains that the password
+  encrypts your vault, and adds confirm-password; headlines, CTAs, and
+  fields differ per mode with animated transitions.
+- **Screen Share page copy** now explains the passive concept: T.I.M.
+  snapshots only at the moment you ask "look at my screen…" — from
+  chat or mid-call.
+
+## v0.3.4 fixes (from the narrated recording — transcribed with the same
+## Whisper engine that ships in the app)
+
+- **Settings toggles actually toggle** and persist (SharedPreferences).
+  Labels rewritten in plain language ("Respond only to my voice"
+  instead of "ECAPA-TDNN Voice Lock").
+- **System Hardware panel** moved out of the sidebar into Vault
+  Settings → "This computer".
+- **Demo sessions removed** — no more hardcoded "Q-L-U-E Sprint
+  Planning / AWS API Gateway Config"; new users start clean.
+- **Launch opens a fresh session**; previous chats stay in the
+  sidebar. **Unnamed sessions auto-title** from your first message.
+- **"Look at my screen" actually looks now**: full-desktop native
+  capture → built-in Windows OCR → the local LLM analyzes the text on
+  your screen. Works from typed text, voice, and the Screen Share
+  button. (Pixel-level vision model still on the roadmap; OCR covers
+  code/docs/web content today.)
+- **The + attach menu works**: Upload files and Add local folder open
+  real pickers; Provide context block opens a paste dialog. All become
+  chips on the next message.
+- **The mic button dictates into the text box** (tap to start/stop)
+  instead of throwing you into Live Call.
+
+## v0.3.3 fixes (from the screen recordings)
+
+- **`<|eot_id|` no longer leaks into replies** — the token streamer now
+  holds back any text that could still become a stop marker and emits
+  only provably-safe text (plus a final sanitizer pass before persist).
+- **Duplicate "hi" bubbles fixed** — a synchronous in-flight guard
+  closes the double-Enter race that existed before `isGenerating` was
+  set (there were async RAG awaits in between).
+- **T.I.M. no longer scolds greetings** — system prompt reworked: a
+  greeting gets one friendly line and "what do you want to work on",
+  not a lecture about providing context. Persona stays direct.
+- **Voice models auto-download on first launch** — no hidden settings
+  step; progress streams into chat ("Downloading voice engine: … %").
+  Downloads are resumable and SHA-256 pinned.
+- **Stop button also cancels voice-call generations**, and generation
+  uses a physical-core thread count (faster on hybrid CPUs, keeps the
+  UI responsive).
+
 ## Troubleshooting (Windows)
 
 | Symptom | Fix |

@@ -18,8 +18,10 @@ class LoginScreen extends ConsumerStatefulWidget {
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
+  final _name = TextEditingController();
   final _email = TextEditingController();
   final _password = TextEditingController();
+  final _confirm = TextEditingController();
   bool _busy = false;
   bool _isSignUp = false;
 
@@ -30,6 +32,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       await ref.read(authProvider.notifier).signUp(
             _email.text.trim(),
             _password.text,
+            name: _name.text.trim(),
           );
     } else {
       await ref.read(authProvider.notifier).signIn(
@@ -40,10 +43,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     if (mounted) setState(() => _busy = false);
   }
 
+  void _switchMode() {
+    setState(() {
+      _isSignUp = !_isSignUp;
+      // Different journey, clean slate: only the email survives the
+      // switch so sign-in and registration feel like separate doors.
+      _password.clear();
+      _confirm.clear();
+    });
+  }
+
   @override
   void dispose() {
+    _name.dispose();
     _email.dispose();
     _password.dispose();
+    _confirm.dispose();
     super.dispose();
   }
 
@@ -108,28 +123,83 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ),
                     const SizedBox(height: 24),
 
-                    // Titles
+                    // Titles — sign-in and registration are distinct
+                    // journeys, not the same card with swapped labels.
                     Center(
-                      child: Text(
-                        'T.I.M. Companion',
-                        style: theme.textTheme.titleLarge?.copyWith(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Center(
-                      child: Text(
-                        _isSignUp ? 'Create your secure local profile' : 'This Is Me — Sign In',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: palette.textSecondary,
-                          fontSize: 14,
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 250),
+                        child: Column(
+                          key: ValueKey(_isSignUp),
+                          children: [
+                            Text(
+                              _isSignUp ? 'Meet T.I.M.' : 'Welcome back',
+                              style: theme.textTheme.titleLarge?.copyWith(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              _isSignUp
+                                  ? 'Your offline career mentor. One profile, '
+                                      'one password — everything stays '
+                                      'encrypted on this PC.'
+                                  : 'This Is Me — Sign In',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: palette.textSecondary,
+                                fontSize: 14,
+                                height: 1.5,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
                     const SizedBox(height: 32),
+
+                    // Your name (registration only)
+                    AnimatedSize(
+                      duration: const Duration(milliseconds: 250),
+                      alignment: Alignment.topCenter,
+                      child: !_isSignUp
+                          ? const SizedBox.shrink()
+                          : Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Your Name',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: palette.muted,
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                TextFormField(
+                                  controller: _name,
+                                  textCapitalization:
+                                      TextCapitalization.words,
+                                  decoration: InputDecoration(
+                                    hintText: 'What should T.I.M. call you?',
+                                    hintStyle:
+                                        TextStyle(color: palette.muted),
+                                    prefixIcon: Icon(Icons.person_outline,
+                                        color: palette.textSecondary,
+                                        size: 20),
+                                    fillColor: palette.surfaceVariant,
+                                    filled: true,
+                                  ),
+                                  validator: (v) => _isSignUp &&
+                                          (v == null || v.trim().isEmpty)
+                                      ? 'Tell T.I.M. your name'
+                                      : null,
+                                ),
+                                const SizedBox(height: 20),
+                              ],
+                            ),
+                    ),
 
                     // Email Input
                     Text(
@@ -178,6 +248,56 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         filled: true,
                       ),
                       validator: (v) => (v == null || v.length < 6) ? 'Min 6 characters' : null,
+                    ),
+                    AnimatedSize(
+                      duration: const Duration(milliseconds: 250),
+                      alignment: Alignment.topCenter,
+                      child: !_isSignUp
+                          ? const SizedBox.shrink()
+                          : Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const SizedBox(height: 8),
+                                Text(
+                                  'This password also encrypts your local '
+                                  'memory vault — losing it means losing '
+                                  'access to your data.',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: palette.muted,
+                                      height: 1.4),
+                                ),
+                                const SizedBox(height: 20),
+                                Text(
+                                  'Confirm Password',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: palette.muted,
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                TextFormField(
+                                  controller: _confirm,
+                                  obscureText: true,
+                                  decoration: InputDecoration(
+                                    hintText: 'Re-enter your password',
+                                    hintStyle:
+                                        TextStyle(color: palette.muted),
+                                    prefixIcon: Icon(Icons.lock_outline,
+                                        color: palette.textSecondary,
+                                        size: 20),
+                                    fillColor: palette.surfaceVariant,
+                                    filled: true,
+                                  ),
+                                  validator: (v) => _isSignUp &&
+                                          v != _password.text
+                                      ? 'Passwords do not match'
+                                      : null,
+                                ),
+                              ],
+                            ),
                     ),
 
                     if (errMsg != null) ...[
@@ -228,7 +348,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                 ),
                               )
                             : Text(
-                                _isSignUp ? 'Create Profile' : 'Sign In',
+                                _isSignUp ? 'Create My Profile' : 'Sign In',
                                 style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
                               ),
                       ),
@@ -238,7 +358,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     // Toggle Link
                     Center(
                       child: TextButton(
-                        onPressed: _busy ? null : () => setState(() => _isSignUp = !_isSignUp),
+                        onPressed: _busy ? null : _switchMode,
                         child: Text(
                           _isSignUp ? 'Already have an account? Sign in' : 'New user? Create a profile',
                           style: TextStyle(

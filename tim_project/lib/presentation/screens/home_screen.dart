@@ -5,15 +5,20 @@
 // and premium chat input pill.
 // ============================================================
 
+import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:desktop_drop/desktop_drop.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:record/record.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../data/models/file_chip.dart';
 import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
-import '../providers/hardware_provider.dart';
 import '../providers/model_provider.dart';
 import '../providers/voice_provider.dart';
 import '../widgets/file_chip_row.dart';
@@ -52,6 +57,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   void dispose() {
+    _dictationSub?.cancel();
+    _dictationRecorder.dispose();
     _inputCtrl.removeListener(_onInputChanged);
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
@@ -80,20 +87,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final chat = ref.watch(chatProvider);
-    final hw = ref.watch(hardwareProvider);
     final model = ref.watch(modelProvider);
     final voice = ref.watch(voiceCallProvider);
     final onboardingDone = ref.watch(onboardingCompletedProvider);
     final theme = Theme.of(context);
     final palette = theme.extension<TimPalette>()!;
 
-    final hardwareInfo = hw.maybeWhen(
-      data: (p) => 'RAM: ${p.totalRamGb.toStringAsFixed(0)} GB\n'
-                   'VRAM: ${p.dedicatedVramGb.toStringAsFixed(0)} GB\n'
-                   'GPU: ${p.gpuName.length > 20 ? "${p.gpuName.substring(0, 20)}..." : p.gpuName}\n'
-                   'Power: ${p.batteryStatusString}',
-      orElse: () => 'Loading stats...',
-    );
+    // v0.3.4: hardware stats moved to Vault Settings ("This computer").
+    // Passing an empty string hides the sidebar block entirely.
+    const hardwareInfo = '';
 
     // Auto-scroll when tokens arrive
     if (chat.isGenerating) _scrollToBottom();
@@ -490,8 +492,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
           const SizedBox(height: 12),
           Text(
-            'T.I.M. can capture and analyze your active display workspace.',
-            style: TextStyle(color: palette.muted, fontSize: 14),
+            'Screen sharing is passive: T.I.M. snapshots your screen only '
+            'at the moment you ask. Say or type "look at my screen…" with '
+            'your question — from chat or during a Live Call — and it '
+            'reads what you\'re working on right then.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: palette.muted, fontSize: 14, height: 1.5),
           ),
           const SizedBox(height: 32),
           ElevatedButton.icon(
@@ -557,15 +563,35 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           PopupMenuButton<String>(
             icon: Icon(Icons.add, color: palette.textSecondary),
             tooltip: 'Add files/context',
-            onSelected: (value) {
-              if (value == 'context') {
-                setState(() => _activeView = 'profile');
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Drag and drop files/folders directly into this window to attach them.'),
-                  ),
-                );
+            onSelected: (value) async {
+              // v0.3.4: these menu items now actually work.
+              final chatCtrl = ref.read(chatProvider.notifier);
+              if (value == 'upload') {
+                final files = await openFiles();
+                for (final f in files) {
+                  final len = await f.length();
+                  chatCtrl.addFileChip(FileChip(
+                    id: DateTime.now().microsecondsSinceEpoch.toString() +
+                        f.name,
+                    name: f.name,
+                    kind: FileChip.inferKind(f.name),
+                    sizeBytes: len,
+                    localUri: f.path,
+                  ));
+                }
+              } else if (value == 'folder') {
+                final dir = await getDirectoryPath();
+                if (dir != null) {
+                  chatCtrl.addFileChip(FileChip(
+                    id: DateTime.now().microsecondsSinceEpoch.toString(),
+                    name: dir.split(Platform.pathSeparator).last,
+                    kind: FileChipKind.unknown,
+                    sizeBytes: 0,
+                    localUri: dir,
+                  ));
+                }
+              } else if (value == 'context') {
+                _showContextBlockDialog(context);
               }
             },
             itemBuilder: (ctx) => [
@@ -648,19 +674,130 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
           const SizedBox(width: 12),
 
-          // Microphone / Send button
+          // Microphone (dictate into the text box) / Send button.
+          // v0.3.4: the mic no longer hijacks you into Live Call —
+          // tap to dictate, tap again to stop; the transcript lands
+          // in the input box for you to edit and send.
           IconButton(
+            tooltip: _dictating
+                ? 'Stop dictation'
+                : (_inputCtrl.text.trim().isNotEmpty
+                    ? 'Send'
+                    : 'Dictate into the message box'),
             icon: Icon(
-              _inputCtrl.text.trim().isNotEmpty ? Icons.send : Icons.mic,
-              color: palette.textSecondary,
+              _inputCtrl.text.trim().isNotEmpty && !_dictating
+                  ? Icons.send
+                  : (_dictating ? Icons.stop_circle : Icons.mic),
+              color: _dictating ? palette.danger : palette.textSecondary,
             ),
             onPressed: () {
-              if (_inputCtrl.text.trim().isNotEmpty) {
+              if (_dictating) {
+                _stopDictation();
+              } else if (_inputCtrl.text.trim().isNotEmpty) {
                 _send();
               } else {
-                ref.read(voiceCallProvider.notifier).startCall();
+                _startDictation();
               }
             },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---- v0.3.4 chat-box dictation ------------------------------
+  final AudioRecorder _dictationRecorder = AudioRecorder();
+  bool _dictating = false;
+  final List<int> _dictationBuffer = [];
+  StreamSubscription<Uint8List>? _dictationSub;
+
+  Future<void> _startDictation() async {
+    if (_dictating) return;
+    if (!await _dictationRecorder.hasPermission()) return;
+    _dictationBuffer.clear();
+    final stream = await _dictationRecorder.startStream(
+      const RecordConfig(
+        encoder: AudioEncoder.pcm16bits,
+        sampleRate: 16000,
+        numChannels: 1,
+      ),
+    );
+    _dictationSub = stream.listen(_dictationBuffer.addAll);
+    setState(() => _dictating = true);
+  }
+
+  Future<void> _stopDictation() async {
+    await _dictationSub?.cancel();
+    _dictationSub = null;
+    await _dictationRecorder.stop();
+    setState(() => _dictating = false);
+    final pcm = Uint8List.fromList(_dictationBuffer);
+    _dictationBuffer.clear();
+    if (pcm.isEmpty) return;
+    final worker = ref.read(timWorkerProvider);
+    final text = await worker.transcribeOnce(pcm);
+    if (text.isNotEmpty && mounted) {
+      final existing = _inputCtrl.text.trim();
+      setState(() {
+        _inputCtrl.text = existing.isEmpty ? text : '$existing $text';
+        _inputCtrl.selection = TextSelection.fromPosition(
+          TextPosition(offset: _inputCtrl.text.length),
+        );
+      });
+    }
+  }
+
+  void _showContextBlockDialog(BuildContext context) {
+    final theme = Theme.of(context);
+    final palette = theme.extension<TimPalette>()!;
+    final ctrl = TextEditingController();
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: palette.surface,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+        ),
+        title: const Text('Context block',
+            style: TextStyle(color: Colors.white)),
+        content: SizedBox(
+          width: 420,
+          child: TextField(
+            controller: ctrl,
+            maxLines: 6,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              hintText:
+                  'Paste any background T.I.M. should consider for the next message…',
+              hintStyle: TextStyle(color: palette.muted),
+            ),
+            autofocus: true,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child:
+                Text('Cancel', style: TextStyle(color: palette.textSecondary)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final v = ctrl.text.trim();
+              if (v.isNotEmpty) {
+                ref.read(chatProvider.notifier).addFileChip(FileChip(
+                      id: DateTime.now().microsecondsSinceEpoch.toString(),
+                      name: v.length > 24 ? '${v.substring(0, 21)}…' : v,
+                      kind: FileChipKind.text,
+                      sizeBytes: v.length,
+                      localUri: '',
+                      metadata: {'text': v},
+                    ));
+              }
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('Attach'),
           ),
         ],
       ),
@@ -710,9 +847,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ),
             onPressed: () {
               final name = controller.text.trim();
-              if (name.isNotEmpty) {
-                ref.read(chatProvider.notifier).changeWorkspace(name);
-              }
+              // v0.3.4: name is optional — an unnamed session starts
+              // blank and titles itself from your first message.
+              ref
+                  .read(chatProvider.notifier)
+                  .changeWorkspace(name.isNotEmpty ? name : 'New Chat');
               Navigator.of(ctx).pop();
             },
             child: const Text('Create', style: TextStyle(fontWeight: FontWeight.bold)),
