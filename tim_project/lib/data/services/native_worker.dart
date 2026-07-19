@@ -287,6 +287,24 @@ class NativeWorker {
     }
   }
 
+  /// v0.3.4 — one-shot dictation for the chat input's mic button
+  /// ("its actual purpose is to record the voice … and transfer it
+  /// into this text box"). Takes raw mic PCM (16 kHz mono s16le),
+  /// returns the transcript. Completely separate from the Live Call
+  /// pipeline: no events, no LLM, no TTS.
+  Future<String> transcribeOnce(Uint8List pcm16) async {
+    if (!_ready) return '';
+    final samples = AudioEngine.pcm16ToFloat(pcm16);
+    if (samples.length < AudioEngine.sampleRate ~/ 2) return '';
+    try {
+      final res = await _engine.transcribe(samples);
+      return res.text;
+    } catch (e) {
+      _log.warn('Dictation transcribe failed: $e');
+      return '';
+    }
+  }
+
   // ================================================================
   // Inbound: JSON control messages (same message types as the old
   // Python worker so callers don't change)

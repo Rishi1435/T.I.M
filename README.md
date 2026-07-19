@@ -113,6 +113,29 @@ downloader as before. Supabase (optional, only for encrypted sync):
 supabase db push   # applies migrations 0001 + 0002
 ```
 
+## v0.3.4 fixes (from the narrated recording — transcribed with the same
+## Whisper engine that ships in the app)
+
+- **Settings toggles actually toggle** and persist (SharedPreferences).
+  Labels rewritten in plain language ("Respond only to my voice"
+  instead of "ECAPA-TDNN Voice Lock").
+- **System Hardware panel** moved out of the sidebar into Vault
+  Settings → "This computer".
+- **Demo sessions removed** — no more hardcoded "Q-L-U-E Sprint
+  Planning / AWS API Gateway Config"; new users start clean.
+- **Launch opens a fresh session**; previous chats stay in the
+  sidebar. **Unnamed sessions auto-title** from your first message.
+- **"Look at my screen" actually looks now**: full-desktop native
+  capture → built-in Windows OCR → the local LLM analyzes the text on
+  your screen. Works from typed text, voice, and the Screen Share
+  button. (Pixel-level vision model still on the roadmap; OCR covers
+  code/docs/web content today.)
+- **The + attach menu works**: Upload files and Add local folder open
+  real pickers; Provide context block opens a paste dialog. All become
+  chips on the next message.
+- **The mic button dictates into the text box** (tap to start/stop)
+  instead of throwing you into Live Call.
+
 ## v0.3.3 fixes (from the screen recordings)
 
 - **`<|eot_id|` no longer leaks into replies** — the token streamer now

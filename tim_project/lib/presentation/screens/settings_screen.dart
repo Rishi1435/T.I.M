@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../providers/app_settings_provider.dart';
+import '../providers/hardware_provider.dart';
 import '../providers/sync_provider.dart';
 
 class SettingsScreen extends ConsumerWidget {
@@ -18,6 +20,9 @@ class SettingsScreen extends ConsumerWidget {
     final palette = theme.extension<TimPalette>()!;
     final syncState = ref.watch(syncProvider);
     final syncCtrl = ref.read(syncProvider.notifier);
+    final settings = ref.watch(appSettingsProvider);
+    final settingsCtrl = ref.read(appSettingsProvider.notifier);
+    final hw = ref.watch(hardwareProvider);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
@@ -49,17 +54,17 @@ class SettingsScreen extends ConsumerWidget {
                   palette: palette,
                   children: [
                     _buildSettingRow(
-                      title: 'Dynamic Hardware Profiling',
+                      title: 'Match AI to my computer',
                       description:
-                          'T.I.M. auto-scales models based on physical RAM and battery power state (e.g., swapping to Qwen2.5 3B when unplugged) to prevent OS lag.',
-                      value: true,
-                      onChanged: (val) {},
+                          'Automatically picks a lighter AI model when your PC is low on memory or running on battery, so the rest of your system stays fast.',
+                      value: settings.hardwareProfiling,
+                      onChanged: settingsCtrl.setHardwareProfiling,
                       palette: palette,
                     ),
                     _buildSettingRow(
-                      title: 'Air-Gapped Mode',
+                      title: 'Offline-only mode',
                       description:
-                          'Sever all Supabase cloud sync completely. All RAG vectors and interaction metadata remain secured locally via SQLite + sqlite-vec.',
+                          'Keep everything on this computer and never sync to the cloud. Your encrypted backup stays local until you turn this off.',
                       value: !syncState.enabled,
                       onChanged: (val) {
                         syncCtrl.toggle(!val);
@@ -76,20 +81,61 @@ class SettingsScreen extends ConsumerWidget {
                   palette: palette,
                   children: [
                     _buildSettingRow(
-                      title: 'ECAPA-TDNN Voice Lock',
+                      title: 'Respond only to my voice',
                       description:
-                          'Biometric scanner matches your vocal footprint during playback. Ignores background noise and halts the AI only when you speak.',
-                      value: true,
-                      onChanged: (val) {},
+                          'During calls, T.I.M. pauses when it hears you speak and ignores other voices, TV, or background noise. Needs a one-time 10-second voice enrollment.',
+                      value: settings.voiceLock,
+                      onChanged: settingsCtrl.setVoiceLock,
                       palette: palette,
                     ),
                     _buildSettingRow(
-                      title: 'Cadence Mentorship Interruption',
+                      title: 'Speaking-pace coaching',
                       description:
-                          'Speech analytics track timestamps between words. T.I.M. will interrupt to correct your cadence if air gaps exceed 2.5 seconds.',
-                      value: true,
-                      onChanged: (val) {},
+                          'If you pause too long or use lots of filler words while practicing, T.I.M. jumps in with a tip to tighten your delivery.',
+                      value: settings.cadenceCoaching,
+                      onChanged: settingsCtrl.setCadenceCoaching,
                       palette: palette,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+
+                _buildCard(
+                  title: 'Behavior',
+                  palette: palette,
+                  children: [
+                    _buildSettingRow(
+                      title: 'Start each launch with a fresh chat',
+                      description:
+                          'Open T.I.M. to a clean new session instead of your previous conversation. Older sessions stay in the sidebar.',
+                      value: settings.openFreshSessionOnLaunch,
+                      onChanged: settingsCtrl.setOpenFreshSessionOnLaunch,
+                      palette: palette,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+
+                // Moved out of the sidebar (v0.3.4): hardware details are
+                // reference info, not something to stare at all day.
+                _buildCard(
+                  title: 'This computer',
+                  palette: palette,
+                  children: [
+                    Text(
+                      hw.maybeWhen(
+                        data: (p) =>
+                            'RAM: ${p.totalRamGb.toStringAsFixed(0)} GB   ·   '
+                            'VRAM: ${p.dedicatedVramGb.toStringAsFixed(0)} GB\n'
+                            'GPU: ${p.gpuName}\n'
+                            'Power: ${p.batteryStatusString}',
+                        orElse: () => 'Detecting hardware…',
+                      ),
+                      style: TextStyle(
+                        fontSize: 13,
+                        height: 1.6,
+                        color: palette.textSecondary,
+                      ),
                     ),
                   ],
                 ),

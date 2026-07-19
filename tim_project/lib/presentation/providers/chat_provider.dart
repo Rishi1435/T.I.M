@@ -18,6 +18,7 @@ import '../../data/models/file_chip.dart';
 import '../../data/services/llm_engine.dart';
 import '../../data/services/screen_watcher.dart';
 import '../../data/services/native_worker.dart';
+import '../../data/services/windows_ocr.dart';
 import 'model_provider.dart';
 import 'vault_provider.dart';
 
@@ -119,8 +120,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
       : super(const ChatState()) {
     _ws.connect();
     _sub = _ws.events.listen(_onEvent);
-    // Load persisted chat history from the vault once it's unlocked.
-    _loadHistory();
+    // v0.3.4: launch into a FRESH session instead of resurfacing the
+    // previous conversation ("when a user opens the application it was
+    // showing me the previous chat — it needs to open a new session").
+    // The session only materialises in the DB when a message is sent,
+    // and gets auto-titled from that first message. Older sessions
+    // stay one click away in the sidebar.
+    state = state.copyWith(activeWorkspace: 'New Chat');
   }
 
   final NativeWorker _ws;
@@ -314,20 +320,36 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _loadHistory();
   }
 
+  /// First ~5 words of the message, cleaned, max 34 chars.
+  static String _titleFromText(String text) {
+    final words = text
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim()
+        .split(' ')
+        .where((w) => w.isNotEmpty)
+        .take(5)
+        .join(' ');
+    final t = words.length > 34 ? '${words.substring(0, 31)}…' : words;
+    if (t.isEmpty) return '';
+    return t[0].toUpperCase() + t.substring(1);
+  }
+
   List<String> getWorkspaces() {
     final vault = _vaultCtrl.vault;
     if (vault == null) return const [];
     try {
+      // v0.3.4: no more hardcoded demo sessions ("Q-L-U-E Sprint
+      // Planning", "AWS API Gateway Config", …). New users see only
+      // their real sessions. The active (possibly still-unsaved)
+      // session is included so the sidebar can highlight it.
       final list = vault.getWorkspaces();
-      final defaults = ['Q-L-U-E Sprint Planning', 'Behavioral Mock Interview', 'AWS API Gateway Config', 'General'];
-      for (final def in defaults) {
-        if (!list.contains(def)) {
-          list.add(def);
-        }
+      if (!list.contains('General')) list.add('General');
+      if (!list.contains(state.activeWorkspace)) {
+        list.insert(0, state.activeWorkspace);
       }
       return list;
     } catch (_) {
-      return ['Q-L-U-E Sprint Planning', 'Behavioral Mock Interview', 'AWS API Gateway Config', 'General'];
+      return [state.activeWorkspace, if (state.activeWorkspace != 'General') 'General'];
     }
   }
 
@@ -427,9 +449,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
             final userMsgId = DateTime.now().microsecondsSinceEpoch.toString();
             _addMessage(MessageSender.user, text, id: userMsgId, persist: false);
             if (ScreenWatcher.isTriggered(text)) {
-              _triggerScreenWatch();
+              _triggerScreenWatch(text);
+            } else {
+              _runLlmForVoice(text);
             }
-            _runLlmForVoice(text);
           } else {
             _addMessage(MessageSender.ai, text);
           }
@@ -550,23 +573,44 @@ class ChatNotifier extends StateNotifier<ChatState> {
     );
   }
 
-  Future<void> _triggerScreenWatch() async {
-    _addSystem('T.I.M. is scanning your screen...');
+  /// v0.3.4 — "look at my screen" now actually looks at the screen.
+  /// Flow: native full-desktop capture (flutter_window.cpp, includes
+  /// whatever window/tab the user is working in) → built-in Windows
+  /// OCR extracts the readable text → the local LLM analyzes that
+  /// text against the user's question. No stub replies.
+  Future<void> _triggerScreenWatch([String userQuestion = '']) async {
+    _addSystem('T.I.M. is reading your screen…');
     try {
-      final watcher = ScreenWatcher(_ws);
-      await watcher.captureAndAnalyse(
-        capture: () async {
-          const channel = MethodChannel('tim.screen/capture');
-          final png = await channel.invokeMethod<Uint8List>('capture');
-          if (png == null) {
-            throw PlatformException(
-              code: 'CAPTURE_FAILED',
-              message: 'No image returned',
-            );
-          }
-          return png;
-        },
-      );
+      const channel = MethodChannel('tim.screen/capture');
+      final png = await channel.invokeMethod<Uint8List>('capture');
+      if (png == null) {
+        throw PlatformException(
+            code: 'CAPTURE_FAILED', message: 'No image returned');
+      }
+      final screenText = await WindowsOcr.extractText(png);
+      if (screenText == null || screenText.trim().length < 10) {
+        _addSystem('I captured the screen but could not read any text '
+            'from it (Windows OCR unavailable or the screen is mostly '
+            'visual). A pixel-level vision model is on the roadmap.');
+        return;
+      }
+      // Keep the prompt within budget: screens can OCR to thousands
+      // of words; keep the most recent ~4000 chars (bottom of screen
+      // usually holds the active content).
+      final clipped = screenText.length > 4000
+          ? screenText.substring(screenText.length - 4000)
+          : screenText;
+      final question = userQuestion.trim().isEmpty
+          ? 'Describe what I am working on and point out anything '
+              'that looks wrong or could be improved.'
+          : userQuestion;
+      final analysisRequest =
+          'I captured the text visible on my screen with OCR. Here it is:\n'
+          '--- SCREEN TEXT START ---\n$clipped\n--- SCREEN TEXT END ---\n\n'
+          'My question about this screen: $question\n'
+          'Note: OCR may contain small recognition errors; ignore obvious '
+          'artifacts. Analyze the content, do not repeat it back.';
+      _runLlmForVoice(analysisRequest);
     } catch (e) {
       _addSystem('Screen capture failed: $e');
     }
@@ -578,6 +622,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
     // Don't allow sending while already generating (sync guard closes
     // the double-Enter race; state flag covers everything else).
     if (_sendBusy || state.isGenerating) return;
+
+    // Screen-share trigger ("look at my screen", "can you see my
+    // screen", …) — previously this text went straight to a blind LLM
+    // which replied confused. Now it routes to capture + OCR + analysis.
+    if (ScreenWatcher.isTriggered(text)) {
+      final userMsgId = DateTime.now().microsecondsSinceEpoch.toString();
+      _addMessage(MessageSender.user, text, id: userMsgId, persist: false);
+      _triggerScreenWatch(text);
+      return;
+    }
     _sendBusy = true;
 
     final attachments = state.pendingChips;
@@ -730,6 +784,22 @@ class ChatNotifier extends StateNotifier<ChatState> {
         // Memory insertion is slow (embedding) — run in background.
         if (!_cancelRequested && finalReply.isNotEmpty) {
           unawaited(_insertMemoriesBackground(text, finalReply, vault));
+        }
+
+        // v0.3.4 auto-title: an unnamed session takes its title from
+        // the first message ("based on the question it needs to
+        // summarize and add a title to the session").
+        if (state.activeWorkspace == 'New Chat' ||
+            state.activeWorkspace.startsWith('New Chat ')) {
+          final title = _titleFromText(text);
+          if (title.isNotEmpty && title != state.activeWorkspace) {
+            try {
+              vault.renameWorkspace(state.activeWorkspace, title);
+              state = state.copyWith(activeWorkspace: title);
+            } catch (e) {
+              _log.warn('Session auto-title failed: $e');
+            }
+          }
         }
       }
     } catch (e) {
