@@ -515,6 +515,43 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               setState(() => _activeMode = 'chat');
             },
           ),
+          const SizedBox(height: 16),
+          // v0.4.0 — Copilot-style continuous sharing lives HERE (the
+          // Screen Share tab), starts with an explicit permission
+          // dialog, and auto-attaches the screen to every question
+          // while active.
+          OutlinedButton.icon(
+            icon: Icon(
+              ref.read(chatProvider.notifier).screenShareActive
+                  ? Icons.stop_screen_share_outlined
+                  : Icons.screen_share_outlined,
+              size: 20,
+            ),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size(220, 48),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(24)),
+            ),
+            label: Text(
+              ref.read(chatProvider.notifier).screenShareActive
+                  ? 'Stop sharing my screen'
+                  : 'Share my entire screen',
+              style: const TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w600),
+            ),
+            onPressed: () async {
+              final ctrl = ref.read(chatProvider.notifier);
+              if (ctrl.screenShareActive) {
+                setState(ctrl.toggleScreenShare);
+                return;
+              }
+              final ok = await _confirmScreenShare(context);
+              if (ok == true && mounted) {
+                setState(ctrl.toggleScreenShare);
+                setState(() => _activeMode = 'chat');
+              }
+            },
+          ),
         ],
       ),
     );
@@ -700,23 +737,48 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               }
             },
           ),
-          const SizedBox(height: 14),
-          // v0.3.9 — Copilot-style continuous sharing: no trigger
-          // phrase needed while ON; every question carries the screen.
-          TextButton.icon(
-            icon: Icon(
-              ref.read(chatProvider.notifier).screenShareActive
-                  ? Icons.stop_screen_share_outlined
-                  : Icons.screen_share_outlined,
-              size: 18,
-            ),
-            label: Text(
-              ref.read(chatProvider.notifier).screenShareActive
-                  ? 'Stop sharing my screen'
-                  : 'Start sharing my screen (auto-attach to every question)',
-            ),
-            onPressed: () => setState(
-                () => ref.read(chatProvider.notifier).toggleScreenShare()),
+        ],
+      ),
+    );
+  }
+
+  Future<bool?> _confirmScreenShare(BuildContext context) {
+    final palette = Theme.of(context).extension<TimPalette>()!;
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: palette.surface,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+        ),
+        title: const Text('Share your entire screen?',
+            style: TextStyle(color: Colors.white)),
+        content: SizedBox(
+          width: 420,
+          child: Text(
+            'While sharing is on, T.I.M. captures your ENTIRE screen at '
+            'the moment you send each question and reads the text on it '
+            'to answer with context.\n\n'
+            '\u2022 Captured only when you ask — never continuously\n'
+            '\u2022 Read locally on this PC — never uploaded\n'
+            '\u2022 Anything visible (messages, passwords on screen) can '
+            'be read — close sensitive windows first\n\n'
+            'You can stop any time from the Screen Share tab.',
+            style: TextStyle(
+                color: palette.textSecondary, fontSize: 13, height: 1.6),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('Cancel',
+                style: TextStyle(color: palette.textSecondary)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Allow & start sharing'),
           ),
         ],
       ),

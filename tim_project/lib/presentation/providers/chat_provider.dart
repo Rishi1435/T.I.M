@@ -204,8 +204,23 @@ class ChatNotifier extends StateNotifier<ChatState> {
   bool _ttsPlaying = false;
 
   bool _playbackNotified = false;
+  Timer? _playbackOffTimer;
 
   void _notifyPlayback(bool active) {
+    if (active) {
+      // Cancel any pending 'off' — a new sentence arrived in the gap.
+      _playbackOffTimer?.cancel();
+      _playbackOffTimer = null;
+    } else {
+      // v0.4.0 — debounce OFF by 900 ms: between sentences the queue
+      // is momentarily empty and the gate must NOT open in that gap.
+      _playbackOffTimer?.cancel();
+      _playbackOffTimer = Timer(const Duration(milliseconds: 900), () {
+        _playbackNotified = false;
+        _ws.sendJson({'type': 'playback_state', 'active': false});
+      });
+      return;
+    }
     if (_playbackNotified == active) return;
     _playbackNotified = active;
     // v0.3.9 — the worker cannot know when SPEAKER OUTPUT is live
@@ -254,14 +269,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
     // questions belong in chat, where waiting is acceptable.
     final vault = _vaultCtrl.vault;
     const ragContext = '';
-    final recent = state.messages.length > 8
-        ? state.messages.sublist(state.messages.length - 8)
+    final recent = state.messages.length > 4
+        ? state.messages.sublist(state.messages.length - 4)
         : state.messages;
     final screenCtx = await _screenContextIfSharing();
     final modelId = _ref.read(modelProvider).selected?.id ?? '';
     final stopSeqs = _getStopSequences(modelId);
-    final prompt =
-        _formatPrompt(modelId, recent, text, ragContext + screenCtx);
+    final prompt = _formatPrompt(
+        modelId, recent, text, ragContext + screenCtx,
+        voiceMode: true);
 
     final aiMsgId = DateTime.now().microsecondsSinceEpoch.toString();
     // Pre-add empty message for streaming response in UI
@@ -459,8 +475,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
     String modelId,
     List<ChatMessage> history,
     String currentText,
-    String ragContext,
-  ) {
+    String ragContext, {
+    bool voiceMode = false,
+  }) {
+    // v0.4.0 — the 30-second wait for a spoken "hi" was CPU prompt
+    // processing of the full system prompt + history. Voice mode uses
+    // a ~10x smaller prompt; depth stays in chat where waiting is OK.
+    const voiceInstruction =
+        'You are T.I.M., a friendly, direct career mentor on a live '
+        'voice call. Reply in 1-3 short conversational sentences. '
+        'No lists, no formatting.';
     const systemInstruction =
         'You are T.I.M. (This Is Me), a direct, hyper-observant career and communication mentor running fully offline on the user\'s own PC.\n'
         'Core behavior:\n'
@@ -473,6 +497,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         '- End substantive answers (not greetings) with ONE focused follow-up question.\n'
         'Tone: professional, warm-but-firm, no emojis, no filler.';
 
+    final instruction = voiceMode ? voiceInstruction : systemInstruction;
     final contextPart =
         ragContext.isNotEmpty ? 'Context:\n$ragContext\n' : '';
 
@@ -481,7 +506,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     if (modelId.contains('llama3')) {
       // Llama 3 format
       prompt.write('<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n'
-          '$systemInstruction\n$contextPart<|eot_id|>');
+          '$instruction\n$contextPart<|eot_id|>');
       for (final msg in history) {
         final role = msg.sender == MessageSender.user ? 'user' : 'assistant';
         prompt.write('<|start_header_id|>$role<|end_header_id|>\n\n'
@@ -491,7 +516,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
           '$currentText<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n');
     } else if (modelId.contains('phi3')) {
       // Phi 3 format
-      prompt.write('<s><|system|>\n$systemInstruction\n$contextPart<|end|>\n');
+      prompt.write('<s><|system|>\n$instruction\n$contextPart<|end|>\n');
       for (final msg in history) {
         final role = msg.sender == MessageSender.user ? 'user' : 'assistant';
         prompt.write('<|$role|>\n${msg.text}<|end|>\n');
@@ -499,7 +524,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       prompt.write('<|user|>\n$currentText<|end|>\n<|assistant|>\n');
     } else {
       // Qwen / ChatML format (default)
-      prompt.write('<|im_start|>system\n$systemInstruction\n$contextPart<|im_end|>\n');
+      prompt.write('<|im_start|>system\n$instruction\n$contextPart<|im_end|>\n');
       for (final msg in history) {
         final role = msg.sender == MessageSender.user ? 'user' : 'assistant';
         prompt.write('<|im_start|>$role\n${msg.text}<|im_end|>\n');

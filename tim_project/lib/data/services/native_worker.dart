@@ -270,6 +270,10 @@ class NativeWorker {
     try {
       final res = await _engine.transcribe(seg);
       if (res.text.isEmpty) return;
+      if (_isEchoOfOwnSpeech(res.text)) {
+        _log.debug('Dropped echo of own speech: "${res.text}"');
+        return;
+      }
 
       // Owner gate for *initiating* speech: outside of TTS overlap we
       // accept all speech (open conversation), matching old behaviour.
@@ -378,6 +382,41 @@ class NativeWorker {
   final List<String> _ttsRequestQueue = [];
   bool _ttsDraining = false;
   bool _clientPlaybackActive = false;
+
+  /// v0.4.0 — text-level echo cancellation. Timing gates leak during
+  /// the silences BETWEEN spoken sentences (VAD ends utterances right
+  /// in those gaps). But the worker knows the EXACT text it spoke, so
+  /// any transcript that matches recent speech is provably an echo
+  /// and is dropped — regardless of timing, speakers, or volume.
+  final List<({String norm, DateTime at})> _recentSpoken = [];
+
+  static String _normalize(String t) =>
+      t.toLowerCase().replaceAll(RegExp(r'[^a-z0-9 ]'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+
+  void _rememberSpoken(String text) {
+    final n = _normalize(text);
+    if (n.isEmpty) return;
+    _recentSpoken.add((norm: n, at: DateTime.now()));
+    _recentSpoken.removeWhere(
+        (e) => DateTime.now().difference(e.at).inSeconds > 90);
+    if (_recentSpoken.length > 40) _recentSpoken.removeAt(0);
+  }
+
+  bool _isEchoOfOwnSpeech(String transcript) {
+    final n = _normalize(transcript);
+    if (n.length < 6) return false;
+    for (final spoken in _recentSpoken) {
+      if (spoken.norm.contains(n)) return true; // transcript ⊆ speech
+      // token-overlap fallback (Whisper drops/mangles words)
+      final tTokens = n.split(' ').toSet();
+      final sTokens = spoken.norm.split(' ').toSet();
+      if (tTokens.length >= 4) {
+        final overlap = tTokens.intersection(sTokens).length / tTokens.length;
+        if (overlap >= 0.8) return true;
+      }
+    }
+    return false;
+  }
   DateTime _lastTtsAudioAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// v0.3.8 — per-sentence tts_requests arrive faster than synthesis;
@@ -417,6 +456,7 @@ class NativeWorker {
         if (!_ttsActive) break; // barge-in confirmed mid-reply
         final s = sentence.trim();
         if (s.isEmpty) continue;
+        _rememberSpoken(s);
         final audio = await _engine.synthesize(_applyTtsDirectives(s));
         if (!_ttsActive) break;
         final pcm = AudioEngine.floatToPcm16(audio.samples, audio.sampleRate);
