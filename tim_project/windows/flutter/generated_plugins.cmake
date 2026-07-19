@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   app_links
   audioplayers_windows
   desktop_drop
+  file_selector_windows
   record_windows
   sqlite3_flutter_libs
   url_launcher_windows

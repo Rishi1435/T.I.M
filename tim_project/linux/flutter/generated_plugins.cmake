@@ -5,6 +5,7 @@
 list(APPEND FLUTTER_PLUGIN_LIST
   audioplayers_linux
   desktop_drop
+  file_selector_linux
   gtk
   record_linux
   sqlite3_flutter_libs
