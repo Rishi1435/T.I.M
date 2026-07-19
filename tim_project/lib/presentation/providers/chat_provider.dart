@@ -18,6 +18,7 @@ import '../../data/models/file_chip.dart';
 import '../../data/services/llm_engine.dart';
 import '../../data/services/screen_watcher.dart';
 import '../../data/services/native_worker.dart';
+import '../../data/services/attachment_reader.dart';
 import '../../data/services/windows_ocr.dart';
 import 'model_provider.dart';
 import 'vault_provider.dart';
@@ -159,6 +160,31 @@ class ChatNotifier extends StateNotifier<ChatState> {
   /// same message twice (the duplicated "hi" bubbles). This flag is set
   /// before the first await and closes that window.
   bool _sendBusy = false;
+
+  /// v0.4.2 — duplicate-reply guard + instrumentation. Two identical
+  /// AI bubbles appeared back-to-back (screenshot evidence). Until the
+  /// double-firing path is named, this guard suppresses the visible
+  /// symptom and the log names the source so the next terminal paste
+  /// convicts the culprit.
+  String _lastAiReplyText = '';
+  DateTime _lastAiReplyAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  bool _isDuplicateAiReply(String text, String source) {
+    final now = DateTime.now();
+    final dup = text.trim().isNotEmpty &&
+        text.trim() == _lastAiReplyText &&
+        now.difference(_lastAiReplyAt).inSeconds < 8;
+    if (dup) {
+      _log.warn('DUPLICATE AI reply suppressed (source=$source). '
+          'If you see this in the terminal, report it — it names the '
+          'code path that fired twice.');
+      return true;
+    }
+    _lastAiReplyText = text.trim();
+    _lastAiReplyAt = now;
+    _log.info('gen-done source=$source chars=${text.length}');
+    return false;
+  }
 
   /// Strip chat-template control tokens that a model may echo
   /// (e.g. a leaked `<|eot_id|` fragment) before persisting/rendering.
@@ -310,6 +336,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
         );
       }
       response = _stripSpecialTokens(response);
+      if (_isDuplicateAiReply(response, 'voice')) {
+        state = state.copyWith(
+          messages:
+              state.messages.where((m) => m.id != aiMsgId).toList(),
+        );
+        return;
+      }
       state = state.copyWith(
         messages: state.messages
             .map((m) => m.id == aiMsgId ? m.copyWith(text: response) : m)
@@ -790,6 +823,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
     }
     // v0.3.9 — Copilot-style sharing: fold in the current screen text.
     ragContext += await _screenContextIfSharing();
+    // v0.4.2 — THE FIX for "what files are you referring to?": chips
+    // were UI-only; their content never reached the model. Now every
+    // attached file/folder/context block is read into the prompt.
+    ragContext += await AttachmentReader.read(attachments);
 
     // Extract last 8 messages for context window prompt history
     final history = state.messages
@@ -872,6 +909,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
       for (final seq in stopSeqs) {
         final idx = finalText.toLowerCase().indexOf(seq.toLowerCase());
         if (idx != -1) finalText = finalText.substring(0, idx);
+      }
+      if (_isDuplicateAiReply(finalText, 'chat')) {
+        state = state.copyWith(
+          messages:
+              state.messages.where((m) => m.id != aiMsgId).toList(),
+          isGenerating: false,
+          streamingMessageId: null,
+        );
+        _sendBusy = false;
+        return;
       }
       state = state.copyWith(
         messages: state.messages.map((m) {

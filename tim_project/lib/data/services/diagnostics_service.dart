@@ -33,6 +33,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
 import '../../core/utils/logger.dart';
+import '../models/file_chip.dart';
+import 'attachment_reader.dart';
 import 'llm_engine.dart';
 import 'local_vault.dart';
 import 'native_worker.dart';
@@ -81,7 +83,48 @@ class DiagnosticsService {
     yield await _checkMicrophone();
     yield await _checkScreenOcr();
     yield _checkVault();
+    yield await _checkAttachmentPipeline();
     yield _checkCloud();
+  }
+
+  /// v0.4.2 — functional check born from a real bug: chips rendered
+  /// in the UI while the model saw nothing. Creates a temp file with
+  /// a sentinel string, runs it through the SAME AttachmentReader the
+  /// chat path uses, and asserts the sentinel lands in the prompt
+  /// context. If this fails, "tell me what's in the files" cannot
+  /// possibly work.
+  Future<DiagResult> _checkAttachmentPipeline() async {
+    Directory? tmp;
+    try {
+      tmp = await Directory.systemTemp.createTemp('tim_diag_attach_');
+      const sentinel = 'TIM_DIAG_SENTINEL_7431';
+      final f = File(p.join(tmp.path, 'probe.txt'));
+      await f.writeAsString('hello, the secret word is $sentinel.');
+      final chips = [
+        FileChip(
+          id: 'diag-attach',
+          name: 'probe.txt',
+          kind: FileChipKind.text,
+          sizeBytes: 40,
+          localUri: f.path,
+        ),
+      ];
+      final ctx = await AttachmentReader.read(chips);
+      if (ctx.contains(sentinel)) {
+        return DiagResult('Attachments reach the model', DiagStatus.pass,
+            'Sentinel file content flowed into the prompt context '
+            '(${ctx.length} chars).');
+      }
+      return DiagResult('Attachments reach the model', DiagStatus.fail,
+          'AttachmentReader returned ${ctx.length} chars WITHOUT the '
+          'sentinel — chips are not reaching the prompt.');
+    } catch (e) {
+      return DiagResult('Attachments reach the model', DiagStatus.fail, '$e');
+    } finally {
+      try {
+        await tmp?.delete(recursive: true);
+      } catch (_) {}
+    }
   }
 
   Future<DiagResult> _checkLlamaDll() async {
