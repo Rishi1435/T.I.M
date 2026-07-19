@@ -222,6 +222,12 @@ class NativeWorker {
     for (final seg in segments) {
       _speechOpen = false;
       _emit(WsEventType.vad, {'state': 'end_of_utterance'});
+      // v0.3.8 — while T.I.M.'s own speech may be feeding back into
+      // the mic, do NOT transcribe completed segments (T.I.M. was
+      // hearing itself through the speakers and replying to itself).
+      // Barge-in detection above still runs; after a confirmed owner
+      // barge-in, _ttsActive drops and normal transcription resumes.
+      if (_selfAudioLikely) continue;
       unawaited(_handleUtterance(seg));
     }
   }
@@ -326,7 +332,11 @@ class NativeWorker {
   void sendJson(Map<String, dynamic> obj) {
     switch (obj['type'] as String?) {
       case 'tts_request':
-        unawaited(_runTts(obj['text'] as String? ?? ''));
+        _ttsRequestQueue.add(obj['text'] as String? ?? '');
+        unawaited(_drainTtsRequests());
+      case 'tts_stop':
+        _ttsRequestQueue.clear();
+        _ttsActive = false; // breaks the sentence loop in _runTts
       case 'screen_vision':
         _pendingVisionPrompt = obj['prompt'] as String? ?? '';
       case 'video_pipeline':
@@ -351,6 +361,31 @@ class NativeWorker {
 
   static final _sentenceSplit = RegExp(r'(?<=[.!?])\s+');
 
+  final List<String> _ttsRequestQueue = [];
+  bool _ttsDraining = false;
+  DateTime _lastTtsAudioAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// v0.3.8 — per-sentence tts_requests arrive faster than synthesis;
+  /// serialize them so audio comes out in order.
+  Future<void> _drainTtsRequests() async {
+    if (_ttsDraining) return;
+    _ttsDraining = true;
+    try {
+      while (_ttsRequestQueue.isNotEmpty) {
+        final text = _ttsRequestQueue.removeAt(0);
+        await _runTts(text);
+      }
+    } finally {
+      _ttsDraining = false;
+    }
+  }
+
+  /// True while T.I.M.'s own speech could be reaching the microphone
+  /// (synthesis active, chunks recently emitted, or playback tail).
+  bool get _selfAudioLikely =>
+      _ttsActive ||
+      DateTime.now().difference(_lastTtsAudioAt).inMilliseconds < 1200;
+
   Future<void> _runTts(String text) async {
     if (!_ready || text.trim().isEmpty) {
       _emit(WsEventType.ttsChunk, {'pcm': Uint8List(0), 'final': true});
@@ -369,6 +404,7 @@ class NativeWorker {
         final audio = await _engine.synthesize(_applyTtsDirectives(s));
         if (!_ttsActive) break;
         final pcm = AudioEngine.floatToPcm16(audio.samples, audio.sampleRate);
+        _lastTtsAudioAt = DateTime.now();
         _emit(WsEventType.ttsChunk, {'pcm': pcm, 'final': false});
       }
     } catch (e) {

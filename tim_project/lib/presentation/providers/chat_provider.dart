@@ -120,6 +120,14 @@ class ChatNotifier extends StateNotifier<ChatState> {
       : super(const ChatState()) {
     _ws.connect();
     _sub = _ws.events.listen(_onEvent);
+    _audioPlayer.onPlayerComplete.listen((_) {
+      _ttsPlaying = false;
+      if (_ttsQueue.isNotEmpty) {
+        _drainTtsQueue();
+      } else {
+        state = state.copyWith(voice: VoiceState.idle);
+      }
+    });
     // v0.3.4: launch into a FRESH session instead of resurfacing the
     // previous conversation ("when a user opens the application it was
     // showing me the previous chat — it needs to open a new session").
@@ -159,33 +167,52 @@ class ChatNotifier extends StateNotifier<ChatState> {
       .trimRight();
 
   /// Called by the UI Stop button to abort streaming.
+  final List<Uint8List> _ttsQueue = [];
+  bool _ttsPlaying = false;
+
+  void _drainTtsQueue() {
+    if (_ttsPlaying || _ttsQueue.isEmpty) return;
+    _ttsPlaying = true;
+    final next = _ttsQueue.removeAt(0);
+    _audioPlayer.play(BytesSource(next));
+  }
+
+  void _silenceTts() {
+    _ws.sendJson({'type': 'tts_stop'});
+    _ttsQueue.clear();
+    _ttsPlaying = false;
+    _audioPlayer.stop();
+    state = state.copyWith(voice: VoiceState.idle);
+  }
+
+  /// v0.3.8 — Stop now means stop: cancels generation, tells the
+  /// worker to abandon queued TTS, silences playback, and releases
+  /// the UI immediately (even if the C++ side takes a moment to
+  /// unwind — during prompt processing llama.cpp cannot be
+  /// interrupted mid-batch, so the UI must not wait for it).
   void stopGeneration() {
     _cancelRequested = true;
     _llm.cancelGeneration();
-    _audioPlayer.stop();
+    _silenceTts();
+    state = state.copyWith(isGenerating: false, streamingMessageId: null);
   }
 
   void _runLlmForVoice(String text) async {
     if (_sendBusy) return;
     _sendBusy = true;
     _cancelRequested = false;
-    // Re-use logic from sendText to query local LLM
-    String ragContext = '';
+    // v0.3.8 — voice mode is latency-critical: skip the RAG lookup
+    // and cap history at the last 8 messages so prompt processing
+    // (the un-interruptible part on CPU) stays short. Deep-memory
+    // questions belong in chat, where waiting is acceptable.
     final vault = _vaultCtrl.vault;
-    if (vault != null) {
-      try {
-        final queryEmb = LlmEngine.hashEmbed(text);
-        final memories = await vault.semanticSearch(queryEmb, workspace: state.activeWorkspace, k: 3);
-        if (memories.isNotEmpty) {
-          ragContext = memories.map((m) => '- ${m.content}').join('\n');
-        }
-      } catch (e) {
-        _log.warn('RAG search failed: $e');
-      }
-    }
+    const ragContext = '';
+    final recent = state.messages.length > 8
+        ? state.messages.sublist(state.messages.length - 8)
+        : state.messages;
     final modelId = _ref.read(modelProvider).selected?.id ?? '';
     final stopSeqs = _getStopSequences(modelId);
-    final prompt = _formatPrompt(modelId, state.messages, text, ragContext);
+    final prompt = _formatPrompt(modelId, recent, text, ragContext);
 
     final aiMsgId = DateTime.now().microsecondsSinceEpoch.toString();
     // Pre-add empty message for streaming response in UI
@@ -193,10 +220,25 @@ class ChatNotifier extends StateNotifier<ChatState> {
     state = state.copyWith(isGenerating: true, streamingMessageId: aiMsgId);
 
     var response = '';
+    var spokenUpTo = 0; // chars already handed to TTS
+    final sentenceEnd = RegExp("[.!?][\\\"'\\)\\]]?\\s");
     try {
       await for (final token in _llm.generate(prompt, stop: stopSeqs)) {
         if (_cancelRequested) break;
         response += token;
+        // v0.3.8 — speak WHILE generating: as soon as a sentence
+        // completes, ship it to TTS. First audio lands after the
+        // first sentence, not after the whole reply.
+        final unspoken = response.substring(spokenUpTo);
+        final m = sentenceEnd.firstMatch(unspoken);
+        if (m != null) {
+          final sentence =
+              _stripSpecialTokens(unspoken.substring(0, m.end)).trim();
+          if (sentence.isNotEmpty) {
+            _ws.sendJson({'type': 'tts_request', 'text': sentence});
+          }
+          spokenUpTo += m.end;
+        }
         // update UI
         state = state.copyWith(
           messages: state.messages.map((m) => m.id == aiMsgId ? m.copyWith(text: response) : m).toList(),
@@ -232,11 +274,19 @@ class ChatNotifier extends StateNotifier<ChatState> {
         }
       }
       
-      // Now request TTS from the Python worker!
-      _ws.sendJson({
-        'type': 'tts_request',
-        'text': response,
-      });
+      // v0.3.8 — speak only the remainder, and only if the user did
+      // not cancel. (Previously this fired unconditionally with the
+      // partial reply, which is why T.I.M. started talking AFTER you
+      // pressed Stop or left the call.)
+      if (!_cancelRequested) {
+        final tail = response.substring(
+            spokenUpTo.clamp(0, response.length));
+        if (tail.trim().isNotEmpty) {
+          _ws.sendJson({'type': 'tts_request', 'text': tail.trim()});
+        }
+      } else {
+        _silenceTts();
+      }
     } catch (e) {
       _addSystem('AI reply generation failed: $e');
     } finally {
@@ -458,23 +508,24 @@ class ChatNotifier extends StateNotifier<ChatState> {
           }
         }
       case WsEventType.ttsChunk:
+        // v0.3.8 — each chunk is one synthesized sentence. Play it as
+        // soon as it arrives instead of buffering the entire reply
+        // (which caused 15-25 s of dead silence before ANY audio).
         final pcm = e.payload['pcm'] as Uint8List?;
         if (pcm != null && pcm.isNotEmpty) {
-          _pcmBuffer.addAll(pcm);
+          final wav = BytesBuilder()
+            ..add(_createWavHeader(pcm.length ~/ 2, 16000, 1, 16))
+            ..add(pcm);
+          _ttsQueue.add(wav.toBytes());
+          state = state.copyWith(voice: VoiceState.speaking);
+          _drainTtsQueue();
         }
-        if (e.payload['final'] == true) {
+        if (e.payload['final'] == true && _ttsQueue.isEmpty && !_ttsPlaying) {
           state = state.copyWith(voice: VoiceState.idle);
-          if (_pcmBuffer.isNotEmpty) {
-            _audioPlayer.stop().then((_) {
-              final builder = BytesBuilder()
-                ..add(_createWavHeader(_pcmBuffer.length ~/ 2, 16000, 1, 16))
-                ..add(_pcmBuffer);
-              _audioPlayer.play(BytesSource(builder.toBytes()));
-              _pcmBuffer.clear();
-            });
-          }
         }
       case WsEventType.interrupt:
+        _ttsQueue.clear();
+        _ttsPlaying = false;
         _audioPlayer.stop();
         _pcmBuffer.clear();
         state = state.copyWith(voice: VoiceState.listening);

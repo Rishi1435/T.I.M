@@ -106,6 +106,10 @@ class VoiceCallController extends StateNotifier<VoiceCallState> {
 
   Future<void> stopCall() async {
     if (!state.active) return;
+    // v0.3.8 — ending the call must also end the talking: abandon
+    // any queued/ongoing synthesis so T.I.M. doesn't keep speaking
+    // after you leave the Live Call screen.
+    _ws.sendJson({'type': 'tts_stop'});
     await _recordSub?.cancel();
     _recordSub = null;
     await _recorder.stop();
