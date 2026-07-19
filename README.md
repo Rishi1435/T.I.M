@@ -110,92 +110,19 @@ SHA-256 pinned on first download). Then drop a `.gguf` via the model
 downloader as before. Supabase (optional, only for encrypted sync):
 
 ```bash
-supabase db push   # applies migrations 0001 + 0002
+cd TIM_Project_Workspace/backend
+python -m venv .venv
+.venv/Scripts/activate             # Windows
+pip install -r requirements.txt
+python audio_server.py --host 127.0.0.1 --port 8765
 ```
 
-## v0.3.6 — built-in Diagnostics ("test everything" in one click)
+### 3. Supabase (auth + encrypted blob sync only)
 
-Vault Settings → Diagnostics → **Run system check**. Ten automated
-checks on the real machine: llama.dll, model files, live LLM
-micro-benchmark (tokens/sec with verdict), voice models, voice engine,
-a TTS→STT round trip where T.I.M. speaks a phrase and transcribes
-itself (no mic/speakers needed), microphone capture + level, screen
-capture + Windows OCR, vault write/read, and cloud session. Results
-stream in live; **Copy report** produces a pasteable text summary for
-debugging conversations.
-
-## v0.3.5 fixes
-
-- **Build fix**: `FileChip.kind` takes the `FileChipKind` enum, not a
-  string — the v0.3.4 attach-menu call sites now use
-  `FileChip.inferKind()` / proper enum values.
-- **Live Call is a conversation first**: speaking-pace coaching
-  ("you are speaking too fast") is now **off by default**, only fires
-  when enabled in settings, and never on short utterances (Whisper
-  timing over a few words produces garbage wpm). Talk to T.I.M. like
-  Gemini Live; flip on coaching only when you want drill mode.
-- **Sign-in and registration are distinct journeys**: registration
-  collects your name (used across the app), explains that the password
-  encrypts your vault, and adds confirm-password; headlines, CTAs, and
-  fields differ per mode with animated transitions.
-- **Screen Share page copy** now explains the passive concept: T.I.M.
-  snapshots only at the moment you ask "look at my screen…" — from
-  chat or mid-call.
-
-## v0.3.4 fixes (from the narrated recording — transcribed with the same
-## Whisper engine that ships in the app)
-
-- **Settings toggles actually toggle** and persist (SharedPreferences).
-  Labels rewritten in plain language ("Respond only to my voice"
-  instead of "ECAPA-TDNN Voice Lock").
-- **System Hardware panel** moved out of the sidebar into Vault
-  Settings → "This computer".
-- **Demo sessions removed** — no more hardcoded "Q-L-U-E Sprint
-  Planning / AWS API Gateway Config"; new users start clean.
-- **Launch opens a fresh session**; previous chats stay in the
-  sidebar. **Unnamed sessions auto-title** from your first message.
-- **"Look at my screen" actually looks now**: full-desktop native
-  capture → built-in Windows OCR → the local LLM analyzes the text on
-  your screen. Works from typed text, voice, and the Screen Share
-  button. (Pixel-level vision model still on the roadmap; OCR covers
-  code/docs/web content today.)
-- **The + attach menu works**: Upload files and Add local folder open
-  real pickers; Provide context block opens a paste dialog. All become
-  chips on the next message.
-- **The mic button dictates into the text box** (tap to start/stop)
-  instead of throwing you into Live Call.
-
-## v0.3.3 fixes (from the screen recordings)
-
-- **`<|eot_id|` no longer leaks into replies** — the token streamer now
-  holds back any text that could still become a stop marker and emits
-  only provably-safe text (plus a final sanitizer pass before persist).
-- **Duplicate "hi" bubbles fixed** — a synchronous in-flight guard
-  closes the double-Enter race that existed before `isGenerating` was
-  set (there were async RAG awaits in between).
-- **T.I.M. no longer scolds greetings** — system prompt reworked: a
-  greeting gets one friendly line and "what do you want to work on",
-  not a lecture about providing context. Persona stays direct.
-- **Voice models auto-download on first launch** — no hidden settings
-  step; progress streams into chat ("Downloading voice engine: … %").
-  Downloads are resumable and SHA-256 pinned.
-- **Stop button also cancels voice-call generations**, and generation
-  uses a physical-core thread count (faster on hybrid CPUs, keeps the
-  UI responsive).
-
-## Troubleshooting (Windows)
-
-| Symptom | Fix |
-|---|---|
-| `No file or variants found for asset: .env` during build | Fixed in v0.3.1 — the `.env` asset entry is removed from pubspec. Pull latest / apply the hotfix patch. Use `--dart-define` for config. |
-| `Building with plugins requires symlink support` | Enable **Settings → System → For developers → Developer Mode**, then `flutter clean && flutter run`. |
-| `Failed to load dynamic library 'llama.dll'` / model load crash | Run `dart run build.dart` once from `tim_project\` (or `.\windows-setup.ps1`). It downloads llama.dll (b5206, AVX2) into the build output. |
-| `Please initialize sherpa-onnx first` | Something called the audio engine before `NativeWorker.connect()` finished. Check the `ready` event before starting a call. |
-| Voice models "missing" error at startup | Expected on first run — Settings → Voice → **Download voice models** (~180 MB, SHA-256 pinned). |
-| Speech analytics shows zero words/timing | Fixed in v0.3.1 — Whisper needed `enableTokenTimestamps: true` (sherpa-onnx 1.13.x returns empty timestamps without it). |
-| `LNK1168: cannot open ...\llama.dll for writing` | A stale process or a pre-placed DLL is blocking the linker. `taskkill /F /IM tim_project.exe`, delete `build\windows\x64\runner\Debug\llama.dll`, re-run. (`windows-setup.ps1` now does this for you.) |
-| `Invalid UTF8 sequence encountered` spam during build hooks | Came from a CP-1252 em-dash inside the old `build.dart`. That file is deleted in v0.3.2. |
-| `git am` fails with "previous rebase directory .git/rebase-apply still exists" | A prior `git am` half-applied: run `git am --abort`, then re-apply. |
+```bash
+cd TIM_Project_Workspace
+supabase db push                   # applies migrations/0001_init.sql
+```
 
 ## TTS Directive (built-in)
 

@@ -9,12 +9,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/theme/app_theme.dart';
+<<<<<<< HEAD
 import '../../data/services/diagnostics_service.dart';
 import '../providers/app_settings_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
 import '../providers/hardware_provider.dart';
 import '../providers/model_provider.dart';
+=======
+import '../providers/app_settings_provider.dart';
+import '../providers/hardware_provider.dart';
+>>>>>>> 0beef901472fb35090cb793886d67557fc8c186d
 import '../providers/sync_provider.dart';
 import '../providers/vault_provider.dart';
 
@@ -146,6 +151,7 @@ class SettingsScreen extends ConsumerWidget {
                     ),
                   ],
                 ),
+<<<<<<< HEAD
                 const SizedBox(height: 24),
 
                 // v0.3.6 — one-click self-test of the whole stack.
@@ -181,6 +187,8 @@ class SettingsScreen extends ConsumerWidget {
                     ),
                   ],
                 ),
+=======
+>>>>>>> 0beef901472fb35090cb793886d67557fc8c186d
               ],
             ),
           ),
