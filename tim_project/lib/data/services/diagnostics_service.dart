@@ -32,6 +32,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
+import '../../core/utils/flight_recorder.dart';
 import '../../core/utils/logger.dart';
 import '../models/file_chip.dart';
 import 'attachment_reader.dart';
@@ -85,6 +86,23 @@ class DiagnosticsService {
     yield _checkVault();
     yield await _checkAttachmentPipeline();
     yield _checkCloud();
+    yield _checkRecentActivity();
+  }
+
+  /// v0.4.3 — "analyze the real info instead of the test data":
+  /// surfaces the flight recorder — what actually happened during
+  /// real usage this session — as a first-class diagnostic.
+  DiagResult _checkRecentActivity() {
+    final err = FlightRecorder.I.lastError;
+    if (err != null) {
+      return DiagResult('Real-usage recorder', DiagStatus.fail,
+          'Last recorded error: $err\n'
+          'Full activity timeline is appended at the bottom of this '
+          'report (Copy report).');
+    }
+    return DiagResult('Real-usage recorder', DiagStatus.pass,
+        'No errors recorded this session. Timeline appended to the '
+        'copied report.');
   }
 
   /// v0.4.2 — functional check born from a real bug: chips rendered
@@ -387,7 +405,10 @@ class DiagnosticsService {
       ..writeln('${results.length} checks — '
           '${results.where((r) => r.status == DiagStatus.pass).length} pass, '
           '$fails fail, '
-          '${results.where((r) => r.status == DiagStatus.skip).length} skipped.');
+          '${results.where((r) => r.status == DiagStatus.skip).length} skipped.')
+      ..writeln()
+      ..writeln('REAL ACTIVITY (last 40 events, newest last):')
+      ..writeln(FlightRecorder.I.dump(last: 40));
     return b.toString();
   }
 }

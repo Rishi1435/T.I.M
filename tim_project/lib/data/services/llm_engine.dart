@@ -26,6 +26,10 @@ class LlmEngine {
 
   final Logger _log;
   LlamaParent? _model;
+
+  /// v0.4.3 — the context window the current model was loaded with,
+  /// so callers can budget prompts instead of overflowing nCtx.
+  int loadedCtx = 4096;
   bool _loading = false;
 
   StreamSubscription<String>? _sub;
@@ -51,6 +55,7 @@ class LlmEngine {
     }
     _loading = true;
     try {
+      loadedCtx = contextTokens;
       _log.info('Loading model in background isolate: $ggufPath '
           '(ctx=$contextTokens, gpu_layers=$gpuLayers)');
       // llama_cpp_dart on Windows uses DynamicLibrary.process() by default,

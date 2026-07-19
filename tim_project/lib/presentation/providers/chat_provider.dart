@@ -13,6 +13,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/utils/flight_recorder.dart';
 import '../../core/utils/logger.dart';
 import '../../data/models/file_chip.dart';
 import '../../data/services/llm_engine.dart';
@@ -175,6 +176,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         text.trim() == _lastAiReplyText &&
         now.difference(_lastAiReplyAt).inSeconds < 8;
     if (dup) {
+      FlightRecorder.I.error('duplicate AI reply suppressed source=$source');
       _log.warn('DUPLICATE AI reply suppressed (source=$source). '
           'If you see this in the terminal, report it — it names the '
           'code path that fired twice.');
@@ -304,6 +306,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final prompt = _formatPrompt(
         modelId, recent, text, ragContext + screenCtx,
         voiceMode: true);
+    FlightRecorder.I.log('send(voice): ${text.length} chars, '
+        'prompt\u2248${(prompt.length / 3.5).round()} tok');
 
     final aiMsgId = DateTime.now().microsecondsSinceEpoch.toString();
     // Pre-add empty message for streaming response in UI
@@ -794,7 +798,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
       return;
     }
     _sendBusy = true;
-
+    // v0.4.3 — an exception ANYWHERE below must release the guard, or
+    // every later send silently no-ops ("click send, it immediately
+    // stops"). The whole body now runs inside this try.
+    try {
     final attachments = state.pendingChips;
     final userMsgId = DateTime.now().microsecondsSinceEpoch.toString();
     // Decouple SQLite write from sending: user message added to UI state immediately, but written to DB later.
@@ -841,12 +848,43 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     final modelState = _ref.read(modelProvider);
     final modelId = modelState.selected?.id ?? 'qwen25-3b';
-    final formattedPrompt = _formatPrompt(
+    var formattedPrompt = _formatPrompt(
       modelId,
       recentHistory,
       text,
       ragContext,
     );
+    // v0.4.3 — hard prompt budget: chars/3.5 ≈ tokens. Overflowing
+    // nCtx made llama.cpp abort generations instantly (the "click
+    // send, it immediately stops" bug). Trim the context block until
+    // the prompt fits, leaving ~700 tokens of reply headroom.
+    final maxPromptTokens = _llm.loadedCtx - 700;
+    if (formattedPrompt.length / 3.5 > maxPromptTokens) {
+      final overshootChars =
+          (formattedPrompt.length - (maxPromptTokens * 3.5)).ceil();
+      final keep =
+          (ragContext.length - overshootChars).clamp(0, ragContext.length);
+      FlightRecorder.I.log('prompt over budget: '
+          '${formattedPrompt.length} chars, trimming context '
+          '${ragContext.length}\u2192$keep');
+      ragContext = keep == 0
+          ? ''
+          : '${ragContext.substring(0, keep)}\n\u2026[context trimmed to '
+              'fit the model window]';
+      formattedPrompt = _formatPrompt(
+        modelId,
+        recentHistory,
+        text,
+        ragContext,
+      );
+      if (keep == 0) {
+        _addSystem('Attached content was too large for the model window '
+            'and was trimmed. For big files, ask about one at a time.');
+      }
+    }
+    FlightRecorder.I.log('send(chat): ${text.length} chars, '
+        '${attachments.length} chips, ctx=${ragContext.length} chars, '
+        'prompt\u2248${(formattedPrompt.length / 3.5).round()} tok');
     final stopSeqs = _getStopSequences(modelId);
 
     final aiMsgId = DateTime.now().microsecondsSinceEpoch.toString();
@@ -909,6 +947,20 @@ class ChatNotifier extends StateNotifier<ChatState> {
       for (final seq in stopSeqs) {
         final idx = finalText.toLowerCase().indexOf(seq.toLowerCase());
         if (idx != -1) finalText = finalText.substring(0, idx);
+      }
+      FlightRecorder.I.log(
+          'gen-done(chat): ${finalText.trim().length} chars');
+      if (finalText.trim().isEmpty) {
+        FlightRecorder.I.error(
+            'empty generation \u2014 prompt too large or engine error');
+        state = state.copyWith(
+          messages: state.messages.where((m) => m.id != aiMsgId).toList(),
+        );
+        _addSystem('The model returned nothing. Most common cause: the '
+            'prompt (attachments + history) exceeded its context window. '
+            'This event was recorded \u2014 Diagnostics \u2192 Copy '
+            'report includes it.');
+        return;
       }
       if (_isDuplicateAiReply(finalText, 'chat')) {
         state = state.copyWith(
@@ -1018,11 +1070,17 @@ class ChatNotifier extends StateNotifier<ChatState> {
         }
       }
     } finally {
-      _sendBusy = false;
       state = state.copyWith(
         isGenerating: false,
         streamingMessageId: null,
       );
+    }
+    } catch (e, st) {
+      FlightRecorder.I.error('sendText crashed: $e');
+      _log.warn('sendText crashed: $e\n$st');
+      _addSystem('Sending failed: $e');
+    } finally {
+      _sendBusy = false;
     }
   }
 

@@ -26,8 +26,11 @@ import '../models/file_chip.dart';
 class AttachmentReader {
   static final Logger _log = Logger('AttachmentReader');
 
-  static const int _perFileCap = 6000; // chars
-  static const int _totalCap = 16000; // chars across all chips
+  // v0.4.3 — sized for the REAL context window. 16K chars (~4K
+  // tokens) overflowed the model's nCtx=4096 the moment history and
+  // the system prompt were added, killing generations instantly.
+  static const int _perFileCap = 3500; // chars
+  static const int _totalCap = 7000; // chars across all chips
 
   static const _textExts = {
     '.txt', '.md', '.dart', '.py', '.js', '.ts', '.json', '.yaml', '.yml',
