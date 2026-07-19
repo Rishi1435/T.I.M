@@ -26,6 +26,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -148,11 +149,18 @@ class DiagnosticsService {
       }
       final tps = tokens / (sw.elapsedMilliseconds / 1000.0);
       final verdict = tps < 3
-          ? ' — very slow; switch to Qwen2.5 (3B) in the model manager.'
-          : (tps < 8 ? ' — usable; 3B model would feel snappier.' : ' — good.');
+          ? ' — very slow. If this is a DEBUG build, that is the cause '
+              '(see note); otherwise use a smaller model.'
+          : (tps < 8 ? ' — usable.' : ' — good.');
+      final debugNote = kDebugMode
+          ? '\n       NOTE: this is a DEBUG build — llama.dll is compiled '
+              'without optimisations. Run '
+              '"flutter run -d windows --release" for real performance '
+              '(typically 5-15x faster).'
+          : '';
       return DiagResult('LLM generation', DiagStatus.pass,
           '$tokens tokens in ${sw.elapsedMilliseconds} ms '
-          '(${tps.toStringAsFixed(1)} tok/s)$verdict');
+          '(${tps.toStringAsFixed(1)} tok/s)$verdict$debugNote');
     } on TimeoutException {
       return DiagResult('LLM generation', DiagStatus.fail,
           'Timed out after 90 s — model may be too large for this machine.');
@@ -202,7 +210,13 @@ class DiagnosticsService {
       final text = await worker
           .selfTestVoiceLoop('testing one two three')
           .timeout(const Duration(seconds: 60));
-      final heard = text.toLowerCase();
+      // Whisper often normalises number words to digits ("one" -> "1").
+      // Both are correct recognition — accept either form.
+      final heard = text
+          .toLowerCase()
+          .replaceAll('1', ' one ')
+          .replaceAll('2', ' two ')
+          .replaceAll('3', ' three ');
       final hits = ['testing', 'one', 'two', 'three']
           .where((w) => heard.contains(w))
           .length;
