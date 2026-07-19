@@ -125,6 +125,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       if (_ttsQueue.isNotEmpty) {
         _drainTtsQueue();
       } else {
+        _notifyPlayback(false);
         state = state.copyWith(voice: VoiceState.idle);
       }
     });
@@ -167,12 +168,57 @@ class ChatNotifier extends StateNotifier<ChatState> {
       .trimRight();
 
   /// Called by the UI Stop button to abort streaming.
+  /// v0.3.9 — Copilot-style screen sharing: while ON, every message
+  /// (typed or spoken) automatically carries a fresh snapshot of the
+  /// screen text, no trigger phrase needed.
+  bool screenShareActive = false;
+
+  void toggleScreenShare() {
+    screenShareActive = !screenShareActive;
+    _addSystem(screenShareActive
+        ? 'Screen sharing ON — every question now includes what\'s on '
+            'your screen (captured at the moment you ask, read locally, '
+            'never uploaded).'
+        : 'Screen sharing OFF.');
+  }
+
+  Future<String> _screenContextIfSharing() async {
+    if (!screenShareActive) return '';
+    try {
+      const channel = MethodChannel('tim.screen/capture');
+      final png = await channel
+          .invokeMethod<Uint8List>('capture')
+          .timeout(const Duration(seconds: 8));
+      if (png == null) return '';
+      final txt = await WindowsOcr.extractText(png);
+      if (txt == null || txt.trim().length < 10) return '';
+      final clipped =
+          txt.length > 2500 ? txt.substring(txt.length - 2500) : txt;
+      return '\n[Current screen content (OCR)]:\n$clipped\n';
+    } catch (_) {
+      return '';
+    }
+  }
+
   final List<Uint8List> _ttsQueue = [];
   bool _ttsPlaying = false;
+
+  bool _playbackNotified = false;
+
+  void _notifyPlayback(bool active) {
+    if (_playbackNotified == active) return;
+    _playbackNotified = active;
+    // v0.3.9 — the worker cannot know when SPEAKER OUTPUT is live
+    // (synthesis finishes long before playback does). The client owns
+    // the player, so the client tells the worker — this is the gate
+    // that stops T.I.M. transcribing its own voice as the user.
+    _ws.sendJson({'type': 'playback_state', 'active': active});
+  }
 
   void _drainTtsQueue() {
     if (_ttsPlaying || _ttsQueue.isEmpty) return;
     _ttsPlaying = true;
+    _notifyPlayback(true);
     final next = _ttsQueue.removeAt(0);
     _audioPlayer.play(BytesSource(next));
   }
@@ -181,6 +227,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _ws.sendJson({'type': 'tts_stop'});
     _ttsQueue.clear();
     _ttsPlaying = false;
+    _notifyPlayback(false);
     _audioPlayer.stop();
     state = state.copyWith(voice: VoiceState.idle);
   }
@@ -210,9 +257,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final recent = state.messages.length > 8
         ? state.messages.sublist(state.messages.length - 8)
         : state.messages;
+    final screenCtx = await _screenContextIfSharing();
     final modelId = _ref.read(modelProvider).selected?.id ?? '';
     final stopSeqs = _getStopSequences(modelId);
-    final prompt = _formatPrompt(modelId, recent, text, ragContext);
+    final prompt =
+        _formatPrompt(modelId, recent, text, ragContext + screenCtx);
 
     final aiMsgId = DateTime.now().microsecondsSinceEpoch.toString();
     // Pre-add empty message for streaming response in UI
@@ -392,7 +441,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
       // Planning", "AWS API Gateway Config", …). New users see only
       // their real sessions. The active (possibly still-unsaved)
       // session is included so the sidebar can highlight it.
-      final list = vault.getWorkspaces();
+      final list = vault
+          .getWorkspaces()
+          .where((w) => !w.startsWith('__'))
+          .toList();
       if (!list.contains('General')) list.add('General');
       if (!list.contains(state.activeWorkspace)) {
         list.insert(0, state.activeWorkspace);
@@ -711,6 +763,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
         _log.warn('RAG context fetch failed: $e');
       }
     }
+    // v0.3.9 — Copilot-style sharing: fold in the current screen text.
+    ragContext += await _screenContextIfSharing();
 
     // Extract last 8 messages for context window prompt history
     final history = state.messages

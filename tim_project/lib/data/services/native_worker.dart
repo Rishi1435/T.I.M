@@ -247,10 +247,17 @@ class NativeWorker {
       case BargeInVerdict.owner:
       case BargeInVerdict.openMode:
         _ttsActive = false; // yield the floor for good
+        _ttsRequestQueue.clear();
+        _clientPlaybackActive = false;
         _emit(WsEventType.biometric, {
           'verified': true,
           'mode': verdict == BargeInVerdict.openMode ? 'open' : 'biometric',
         });
+        // v0.3.9 — this buffer IS the user's interruption. Feeding it
+        // to STT (instead of discarding it) is what makes talking
+        // over T.I.M. actually work: it stops AND answers what you
+        // said, no repeating yourself.
+        unawaited(_handleUtterance(buf));
       case BargeInVerdict.notOwner:
         _bargeInPaused = false;
         _emit(WsEventType.biometric, {'verified': false});
@@ -337,6 +344,13 @@ class NativeWorker {
       case 'tts_stop':
         _ttsRequestQueue.clear();
         _ttsActive = false; // breaks the sentence loop in _runTts
+      case 'playback_state':
+        // v0.3.9 — the CLIENT owns the audio player, so only it knows
+        // when speaker output is actually live. This replaces the
+        // emission-time heuristic that expired mid-playback and let
+        // T.I.M. transcribe its own voice as the user (the duplicated
+        // 'Got it. What specifically…' bubbles).
+        _clientPlaybackActive = obj['active'] == true;
       case 'screen_vision':
         _pendingVisionPrompt = obj['prompt'] as String? ?? '';
       case 'video_pipeline':
@@ -363,6 +377,7 @@ class NativeWorker {
 
   final List<String> _ttsRequestQueue = [];
   bool _ttsDraining = false;
+  bool _clientPlaybackActive = false;
   DateTime _lastTtsAudioAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// v0.3.8 — per-sentence tts_requests arrive faster than synthesis;
@@ -384,7 +399,8 @@ class NativeWorker {
   /// (synthesis active, chunks recently emitted, or playback tail).
   bool get _selfAudioLikely =>
       _ttsActive ||
-      DateTime.now().difference(_lastTtsAudioAt).inMilliseconds < 1200;
+      _clientPlaybackActive ||
+      DateTime.now().difference(_lastTtsAudioAt).inMilliseconds < 400;
 
   Future<void> _runTts(String text) async {
     if (!_ready || text.trim().isEmpty) {

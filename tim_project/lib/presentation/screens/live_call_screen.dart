@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:glass_kit/glass_kit.dart';
 
+import '../providers/chat_provider.dart';
 import '../providers/voice_provider.dart';
 import '../widgets/waveform.dart';
 
@@ -20,6 +21,16 @@ class LiveCallView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final voice = ref.watch(voiceCallProvider);
+    // v0.3.9 — live transcript: silence used to look like a hang.
+    final chat = ref.watch(chatProvider);
+    final userMsgs = chat.messages
+        .where((m) => m.sender == MessageSender.user && m.text.isNotEmpty)
+        .toList();
+    final aiMsgs = chat.messages
+        .where((m) => m.sender == MessageSender.ai && m.text.isNotEmpty)
+        .toList();
+    final lastUser = userMsgs.isEmpty ? null : userMsgs.last;
+    final lastAi = aiMsgs.isEmpty ? null : aiMsgs.last;
     return Stack(
       children: [
         // Ambient gradient backdrop
@@ -69,7 +80,42 @@ class LiveCallView extends ConsumerWidget {
                   ),
                   const SizedBox(height: 24),
                   Waveform(samples: voice.waveform, level: voice.decibel),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 16),
+                  if (lastUser != null)
+                    Text(
+                      'You: ${lastUser.text}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.55),
+                        fontSize: 12,
+                      ),
+                    ),
+                  if (lastAi != null) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      lastAi.text,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                  if (chat.isGenerating) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'thinking…',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.4),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
                   if (voice.interruptionMessage != null)
                     Container(
                       padding: const EdgeInsets.symmetric(

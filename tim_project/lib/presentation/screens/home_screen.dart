@@ -508,7 +508,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
             ),
             icon: const Icon(Icons.screen_share, size: 24),
-            label: const Text('Scan Active Screen', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            label: const Text('Ask about my screen now', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             onPressed: () {
               // Send the trigger phrase to run the vision pipeline
               ref.read(chatProvider.notifier).sendText("look at my screen");
@@ -699,6 +699,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 _startDictation();
               }
             },
+          ),
+          const SizedBox(height: 14),
+          // v0.3.9 — Copilot-style continuous sharing: no trigger
+          // phrase needed while ON; every question carries the screen.
+          TextButton.icon(
+            icon: Icon(
+              ref.read(chatProvider.notifier).screenShareActive
+                  ? Icons.stop_screen_share_outlined
+                  : Icons.screen_share_outlined,
+              size: 18,
+            ),
+            label: Text(
+              ref.read(chatProvider.notifier).screenShareActive
+                  ? 'Stop sharing my screen'
+                  : 'Start sharing my screen (auto-attach to every question)',
+            ),
+            onPressed: () => setState(
+                () => ref.read(chatProvider.notifier).toggleScreenShare()),
           ),
         ],
       ),
