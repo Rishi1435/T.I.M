@@ -39,6 +39,7 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/utils/flight_recorder.dart';
 import '../../core/utils/logger.dart';
 import 'audio_engine.dart';
 import 'biometric_gate.dart';
@@ -200,6 +201,7 @@ class NativeWorker {
       final speech = _engine.isSpeechActive || _detectEnergy(samples);
       if (speech && !_bargeInPaused) {
         _bargeInPaused = true;
+        FlightRecorder.I.log('worker: barge-in stage 1 (pause)');
         _emit(WsEventType.interrupt, {'stage': 1, 'reason': 'speech'});
       }
       if (_bargeInPaused &&
@@ -227,7 +229,11 @@ class NativeWorker {
       // hearing itself through the speakers and replying to itself).
       // Barge-in detection above still runs; after a confirmed owner
       // barge-in, _ttsActive drops and normal transcription resumes.
-      if (_selfAudioLikely) continue;
+      if (_selfAudioLikely) {
+        FlightRecorder.I.log('worker: utterance dropped (self-audio gate: '
+            'tts=$_ttsActive playback=$_clientPlaybackActive)');
+        continue;
+      }
       unawaited(_handleUtterance(seg));
     }
   }
@@ -243,6 +249,7 @@ class NativeWorker {
     _bargeInBuffer.clear();
     final emb = await _engine.speakerEmbedding(buf);
     final verdict = _gate!.verify(emb);
+    FlightRecorder.I.log('worker: barge-in stage 2 verdict=$verdict');
     switch (verdict) {
       case BargeInVerdict.owner:
       case BargeInVerdict.openMode:
@@ -272,8 +279,12 @@ class NativeWorker {
       if (res.text.isEmpty) return;
       if (_isEchoOfOwnSpeech(res.text)) {
         _log.debug('Dropped echo of own speech: "${res.text}"');
+        FlightRecorder.I.log('worker: utterance dropped (echo filter): '
+            '"${res.text.length > 40 ? res.text.substring(0, 40) : res.text}"');
         return;
       }
+      FlightRecorder.I
+          .log('worker: transcribed ${res.text.length} chars \u2192 chat');
 
       // Owner gate for *initiating* speech: outside of TTS overlap we
       // accept all speech (open conversation), matching old behaviour.
@@ -355,6 +366,8 @@ class NativeWorker {
         // T.I.M. transcribe its own voice as the user (the duplicated
         // 'Got it. What specifically…' bubbles).
         _clientPlaybackActive = obj['active'] == true;
+        FlightRecorder.I
+            .log('worker: playback_state=$_clientPlaybackActive');
         if (!_clientPlaybackActive) {
           // v0.4.1 — turn boundary: T.I.M. just finished speaking.
           // Reset every per-turn buffer so turn 2 starts pristine:

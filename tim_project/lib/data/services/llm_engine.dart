@@ -15,10 +15,12 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:llama_cpp_dart/llama_cpp_dart.dart';
 
 import '../../core/constants/tim_constants.dart';
+import '../../core/utils/flight_recorder.dart';
 import '../../core/utils/logger.dart';
 
 class LlmEngine {
@@ -30,6 +32,15 @@ class LlmEngine {
   /// v0.4.3 — the context window the current model was loaded with,
   /// so callers can budget prompts instead of overflowing nCtx.
   int loadedCtx = 4096;
+
+  /// v0.4.4 — snapshot of the freshly-loaded (empty) KV state.
+  /// The child isolate's position counter accumulates across EVERY
+  /// prompt and reply and is never reset — once it nears nCtx,
+  /// setPrompt throws "Context full" instantly (the 117 ms empty
+  /// generations that got worse the longer a session ran). Restoring
+  /// this clean snapshot before each generation resets the counter;
+  /// we resend the full prompt every turn anyway, so no state is lost.
+  Uint8List? _cleanState;
   bool _loading = false;
 
   StreamSubscription<String>? _sub;
@@ -119,6 +130,17 @@ class LlmEngine {
       _model = parent;
       await parent.init();
       _log.info('Model loaded successfully.');
+      try {
+        final snapScope = _model!.getScope();
+        _cleanState = await _model!.saveState(snapScope);
+        await _model!.disposeScope(snapScope);
+        FlightRecorder.I
+            .log('llm: clean-state snapshot ${_cleanState!.length} bytes');
+      } catch (e) {
+        _log.warn('Clean-state snapshot failed (context will accumulate '
+            'until reload): $e');
+        FlightRecorder.I.error('llm snapshot failed: $e');
+      }
     } finally {
       _loading = false;
     }
@@ -168,6 +190,15 @@ class LlmEngine {
 
     final scope = _model!.getScope();
 
+    // v0.4.4 — fresh context every turn (see _cleanState).
+    if (_cleanState != null) {
+      try {
+        await _model!.loadState(scope, _cleanState!);
+      } catch (e) {
+        FlightRecorder.I.error('llm state reset failed: $e');
+      }
+    }
+
     // Set up a local stream controller for this generation session
     final controller = StreamController<String>();
     _controller = controller;
@@ -181,6 +212,15 @@ class LlmEngine {
 
     // Listen for completion events to close the controller
     final compSub = scope.completions.listen((event) {
+      // v0.4.4 — the completion event carries the REAL failure reason
+      // (e.g. "Context full"); it was being discarded, leaving only a
+      // mysterious 0-char generation. Now it lands in the recorder.
+      if (event.success) {
+        FlightRecorder.I.log('llm: completion ok');
+      } else {
+        FlightRecorder.I.error(
+            'llm completion FAILED: ${event.errorDetails ?? 'unknown'}');
+      }
       if (!controller.isClosed) {
         controller.close();
       }

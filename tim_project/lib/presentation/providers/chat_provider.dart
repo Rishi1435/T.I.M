@@ -123,6 +123,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _ws.connect();
     _sub = _ws.events.listen(_onEvent);
     _audioPlayer.onPlayerComplete.listen((_) {
+      _playGeneration++; // invalidate the watchdog for this chunk
       _ttsPlaying = false;
       if (_ttsQueue.isNotEmpty) {
         _drainTtsQueue();
@@ -258,12 +259,37 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _ws.sendJson({'type': 'playback_state', 'active': active});
   }
 
+  int _playGeneration = 0;
+  Timer? _playWatchdog;
+
   void _drainTtsQueue() {
     if (_ttsPlaying || _ttsQueue.isEmpty) return;
     _ttsPlaying = true;
     _notifyPlayback(true);
     final next = _ttsQueue.removeAt(0);
     _audioPlayer.play(BytesSource(next));
+    // v0.4.4 — watchdog: if onPlayerComplete never fires (observed
+    // class of Windows audio flakiness), _ttsPlaying would latch true
+    // forever: the queue stalls AND the worker's mic gate stays shut —
+    // which silently kills every following voice turn. Expected chunk
+    // duration is bytes/32000 s (16 kHz s16le); allow +2.5 s grace,
+    // then force-advance and record the event.
+    final gen = ++_playGeneration;
+    final expectedMs = ((next.length - 44) / 32.0).round() + 2500;
+    _playWatchdog?.cancel();
+    _playWatchdog = Timer(Duration(milliseconds: expectedMs), () {
+      if (_ttsPlaying && gen == _playGeneration) {
+        FlightRecorder.I.error(
+            'playback watchdog fired (completion event never arrived)');
+        _ttsPlaying = false;
+        if (_ttsQueue.isNotEmpty) {
+          _drainTtsQueue();
+        } else {
+          _notifyPlayback(false);
+          state = state.copyWith(voice: VoiceState.idle);
+        }
+      }
+    });
   }
 
   void _silenceTts() {
